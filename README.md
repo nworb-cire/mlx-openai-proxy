@@ -1,45 +1,31 @@
 # MLX OpenAI Proxy
 
-Transparent OpenAI-compatible middleware for local MLX-native backends on Apple Silicon.
+MLX OpenAI Proxy is a compatibility layer that lets OpenAI-style clients talk to local MLX model backends on Apple Silicon.
 
-## Goals
+## What It Does
 
-- Preserve the client-facing OpenAI API surface.
-- Keep normal streaming behavior for ordinary requests.
-- Preserve visible reasoning on reasoning-capable models.
-- Make structured output safer by using a two-phase "reason, then format" path.
+It sits between an application and a local model server, translating requests in a way that keeps the OpenAI API shape familiar to the caller. The goal is to make local models easier to use with existing tools, SDKs, and workflows that already expect OpenAI-compatible behavior.
 
-## Endpoints
+The proxy is especially useful when you want to run models locally without rewriting the rest of your stack. It helps preserve normal chat and streaming patterns, and it adds safer handling for responses that need to match a strict structure.
 
-- `/v1/chat/completions`
-- `/v1/responses`
-- `/v1/models`
-- `/healthz`
+In practice, this project is meant to sit on top of `LM Studio`. `LM Studio` handles loading and serving the local MLX-backed models, while this proxy adds the OpenAI-compatible interface, request routing, and observability layer in front of it.
 
-## Run
+## What It Is Used For
 
-```bash
-git clone git@github.com:nworb-cire/mlx-openai-proxy.git
-cd mlx-openai-proxy
-uv venv
-source .venv/bin/activate
-uv pip install -e .
-mlx-openai-proxy
-```
+Use this project when you want to:
 
-Or use the included launch script:
+- point OpenAI-compatible applications at local MLX-hosted models
+- keep a familiar API surface while changing the backend
+- support structured-output workflows more reliably
+- observe local model traffic through a lightweight dashboard and request metrics
+- manage a small local serving stack where `LM Studio` runs the models and the proxy coordinates how clients reach them
 
-```bash
-./bin/start-stack.sh
-```
+## Burst Workflow
 
-Environment variables:
+This repo also includes a burst workflow for handling requests that should run on a larger or different model than the normal default.
 
-- `MLX_PROXY_BACKEND_BASE_URL=http://127.0.0.1:8080/v1`
-- `MLX_PROXY_HOST=0.0.0.0`
-- `MLX_PROXY_PORT=8090`
-- `MLX_PROXY_METRICS_DB_PATH=./data/metrics.db`
-- `LM_BIN=~/.lmstudio/bin/lms`
-- `PROXY_BIN=./.venv/bin/mlx-openai-proxy`
-- `MLX_PROXY_REASONING_VISIBILITY=compatible`
-- `MLX_PROXY_SCHEMA_MODE=auto`
+At a high level, the proxy keeps a default model ready for ordinary traffic. When a request targets the burst model, the proxy can switch `LM Studio` over to that model, serve the queued burst work, and then return to the default model when the burst traffic is finished. The purpose is to make it practical to keep a lighter everyday model available while still being able to temporarily "burst" into a heavier model when needed.
+
+## In Practice
+
+This project is meant for developers building local AI workflows on Apple hardware. It is not the model-serving engine itself; it is the layer that sits in front of `LM Studio` to make local inference feel more like a drop-in OpenAI-style service.
