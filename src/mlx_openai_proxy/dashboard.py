@@ -327,27 +327,24 @@ def dashboard_html() -> str:
     }
     const HISTORY_WINDOW_SECONDS = 12 * 60 * 60;
     const ROLLING_WINDOW_SECONDS = 10 * 60;
-    const ROLLING_STEP_SECONDS = 10 * 60;
     function buildRollingSeriesByModel(items, pickY, nowSeconds) {
       const rawSeries = buildSeriesByModel(items, pickY);
       const startSeconds = nowSeconds - HISTORY_WINDOW_SECONDS;
-      const firstSample = Math.ceil(startSeconds / ROLLING_STEP_SECONDS) * ROLLING_STEP_SECONDS;
       return rawSeries.map((entry) => {
         const points = [];
         let left = 0;
-        let right = 0;
-        for (let sample = firstSample; sample <= nowSeconds; sample += ROLLING_STEP_SECONDS) {
-          while (left < entry.points.length && entry.points[left].x < sample - ROLLING_WINDOW_SECONDS) {
+        let sum = 0;
+        entry.points.forEach((point, index) => {
+          if (point.x < startSeconds) return;
+          sum += point.y;
+          while (left <= index && entry.points[left].x < point.x - ROLLING_WINDOW_SECONDS) {
+            sum -= entry.points[left].y;
             left += 1;
           }
-          while (right < entry.points.length && entry.points[right].x <= sample) {
-            right += 1;
-          }
-          const windowPoints = entry.points.slice(left, right);
-          if (!windowPoints.length) continue;
-          const avg = windowPoints.reduce((sum, point) => sum + point.y, 0) / windowPoints.length;
-          points.push({ x: sample, y: avg, model: entry.model });
-        }
+          const windowCount = index - left + 1;
+          if (windowCount <= 0) return;
+          points.push({ x: point.x, y: sum / windowCount, model: entry.model });
+        });
         return { model: entry.model, points };
       }).filter((entry) => entry.points.length);
     }
