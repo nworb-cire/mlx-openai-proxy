@@ -41,6 +41,7 @@ class Settings(BaseSettings):
 
     backend_base_url: str = Field(default="http://127.0.0.1:8080/v1")
     backend_timeout_seconds: float = Field(default=600.0)
+    active_request_timeout_seconds: float = Field(default=600.0)
     max_upstream_concurrency: int = Field(default=2)
     lm_studio_bin: str = Field(default_factory=_default_lm_studio_bin)
 

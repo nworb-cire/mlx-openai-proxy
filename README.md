@@ -24,7 +24,7 @@ Use this project when you want to:
 
 This repo also includes a burst workflow for handling requests that should run on a larger or different model than the normal default.
 
-At a high level, the proxy keeps a default model ready for ordinary traffic. When a request targets the burst model, the proxy can switch `LM Studio` over to that model, serve the queued burst work, and then return to the default model when the burst traffic is finished. The purpose is to make it practical to keep a lighter everyday model available while still being able to temporarily "burst" into a heavier model when needed.
+At a high level, the proxy keeps a default model ready for ordinary traffic. When a request targets the burst model, the proxy can switch `LM Studio` over to that model and keep the most recently used model loaded after the burst work is finished. The purpose is to make it practical to keep a lighter everyday model available while still being able to switch into a heavier model when needed without immediately flipping back on idle.
 
 ## In Practice
 

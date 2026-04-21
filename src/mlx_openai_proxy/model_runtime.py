@@ -65,6 +65,32 @@ class ModelRuntimeManager:
     def concurrency_for(self, alias: str) -> int:
         return max(1, self._specs[alias].parallel)
 
+    def current_active_alias(self) -> str | None:
+        return self._active_alias
+
+    async def current_loaded_aliases(self) -> list[str]:
+        return await self.list_loaded_aliases()
+
+    async def current_loaded_alias(self) -> str | None:
+        loaded_aliases = await self.list_loaded_aliases()
+        if loaded_aliases:
+            return loaded_aliases[0]
+        return None
+
+    async def normalize_residency(self, preferred_alias: str | None = None) -> str:
+        loaded_aliases = await self.list_loaded_aliases()
+        known_loaded = [alias for alias in loaded_aliases if alias in self._specs]
+
+        if preferred_alias is not None:
+            target_alias = self.normalize_alias(preferred_alias)
+        elif known_loaded:
+            target_alias = known_loaded[0]
+        else:
+            target_alias = self.settings.default_model_alias
+
+        await self.switch_to(target_alias)
+        return target_alias
+
     async def switch_to(self, alias: str) -> None:
         alias = self.normalize_alias(alias)
         async with self._lock:
@@ -73,6 +99,9 @@ class ModelRuntimeManager:
     async def _switch_to_locked(self, alias: str) -> None:
         loaded_aliases = await self.list_loaded_aliases()
         if alias in loaded_aliases:
+            for loaded_alias in loaded_aliases:
+                if loaded_alias != alias:
+                    await self._run_lms("unload", loaded_alias)
             self._active_alias = alias
             return
 

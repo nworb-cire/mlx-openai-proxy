@@ -35,7 +35,7 @@ def dashboard_html() -> str:
     .meta { color: var(--muted); margin-bottom: 24px; }
     .cards {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 24px;
     }
@@ -54,6 +54,11 @@ def dashboard_html() -> str:
     }
     .label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
     .value { font-size: 28px; margin-top: 8px; }
+    .value.model {
+      font-size: 20px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
     .chart-head {
       display: flex;
       justify-content: space-between;
@@ -172,6 +177,7 @@ def dashboard_html() -> str:
       <div class="card"><div class="label">Active Requests</div><div class="value" id="active-count">0</div></div>
       <div class="card"><div class="label">Completed</div><div class="value" id="completed-count">0</div></div>
       <div class="card"><div class="label">Errors</div><div class="value" id="error-count">0</div></div>
+      <div class="card"><div class="label">Loaded Model</div><div class="value model" id="loaded-model">unknown</div></div>
       <div class="card"><div class="label">Avg Service / Wait</div><div class="value" id="avg-duration">0 / 0 ms</div></div>
     </div>
     <div class="graphs">
@@ -472,6 +478,7 @@ def dashboard_html() -> str:
       document.getElementById('active-count').textContent = summary.active_count;
       document.getElementById('completed-count').textContent = summary.completed_count;
       document.getElementById('error-count').textContent = summary.error_count;
+      document.getElementById('loaded-model').textContent = summary.loaded_model || 'unknown';
       document.getElementById('avg-duration').textContent = `${summary.avg_service_duration_ms} / ${summary.avg_queue_duration_ms} ms`;
 
       renderChart(

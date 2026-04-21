@@ -14,7 +14,7 @@ from .logging_utils import configure_logging
 from .metrics_store import MetricsStore
 from .model_runtime import ModelRuntimeManager
 from .model_scheduler import ModelScheduler
-from .service import ProxyService
+from .service import ActiveRequestTimeoutError, ProxyService
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
+            await runtime.normalize_residency()
             yield
         finally:
             await backend.close()
@@ -58,7 +59,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/admin/api/summary")
     async def admin_summary() -> dict[str, object]:
-        return metrics.get_summary()
+        summary = metrics.get_summary()
+        try:
+            summary["active_model"] = runtime.current_active_alias()
+            summary["loaded_models"] = await runtime.current_loaded_aliases()
+            summary["loaded_model"] = summary["active_model"]
+        except Exception:
+            summary["active_model"] = None
+            summary["loaded_models"] = []
+            summary["loaded_model"] = None
+        return summary
 
     @app.get("/admin/api/active")
     async def admin_active() -> dict[str, object]:
@@ -73,6 +83,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body = await request.json()
         try:
             return await service.chat(body)
+        except ActiveRequestTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
         except BackendError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
@@ -83,6 +95,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body = await request.json()
         try:
             return await service.responses(body)
+        except ActiveRequestTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
         except BackendError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:

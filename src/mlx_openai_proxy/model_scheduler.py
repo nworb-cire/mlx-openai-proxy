@@ -27,6 +27,17 @@ class ModelScheduler:
         self._lock = asyncio.Lock()
         self._switch_task: asyncio.Task[None] | None = None
 
+    async def wait_for_idle(self) -> None:
+        while True:
+            switch_task = self._switch_task
+            if switch_task is not None:
+                await switch_task
+                continue
+            async with self._lock:
+                if self._switch_task is None and not self._queue and self._active_count == 0:
+                    return
+            await asyncio.sleep(0)
+
     @asynccontextmanager
     async def slot(self, request_id: str, model: str) -> AsyncIterator[str]:
         normalized_model = self.runtime.normalize_alias(model)
@@ -62,8 +73,6 @@ class ModelScheduler:
             return
 
         if not self._queue:
-            if self._active_model != self.default_alias:
-                self._start_switch_locked(self.default_alias)
             return
 
         head_model = self._queue[0].model

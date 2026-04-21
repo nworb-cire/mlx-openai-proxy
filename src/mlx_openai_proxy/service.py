@@ -9,6 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
+import httpx
 from fastapi.responses import StreamingResponse
 
 from .backend import BackendClient, BackendError
@@ -108,6 +109,10 @@ class GemmaThoughtStreamParser:
         self._leading_whitespace = ""
         self._buffer = ""
         return reasoning, []
+
+
+class ActiveRequestTimeoutError(RuntimeError):
+    pass
 
 
 class ProxyService:
@@ -674,50 +679,64 @@ class ProxyService:
         output_parts: list[str] = []
         gemma_parser = self._make_gemma_stream_parser(stream_body.get("model"))
 
-        async for event in self.backend.post_stream("/chat/completions", stream_body):
-            if event is None:
-                break
-            if response_id is None and isinstance(event.get("id"), str):
-                response_id = event["id"]
-            if created is None and isinstance(event.get("created"), int):
-                created = event["created"]
-            if isinstance(event.get("model"), str):
-                model = event["model"]
-            if isinstance(event.get("system_fingerprint"), str):
-                system_fingerprint = event["system_fingerprint"]
-            if "usage" in event and isinstance(event.get("usage"), dict):
-                usage = event["usage"]
-            for choice in event.get("choices", []):
-                if not isinstance(choice, dict):
-                    continue
-                delta = choice.get("delta") or {}
-                if not isinstance(delta, dict):
-                    delta = {}
-                if isinstance(delta.get("role"), str):
-                    role = delta["role"]
-                reasoning_delta = delta.get("reasoning_content")
-                if isinstance(reasoning_delta, str):
-                    reasoning_parts.append(reasoning_delta)
-                    if request_id is not None:
-                        self.metrics.append_progress(request_id, reasoning_delta=reasoning_delta)
-                content_delta = delta.get("content")
-                if isinstance(content_delta, str):
-                    if gemma_parser is None:
-                        output_parts.append(content_delta)
+        try:
+            async for event in self.backend.post_stream("/chat/completions", stream_body):
+                if event is None:
+                    break
+                if response_id is None and isinstance(event.get("id"), str):
+                    response_id = event["id"]
+                if created is None and isinstance(event.get("created"), int):
+                    created = event["created"]
+                if isinstance(event.get("model"), str):
+                    model = event["model"]
+                if isinstance(event.get("system_fingerprint"), str):
+                    system_fingerprint = event["system_fingerprint"]
+                if "usage" in event and isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                for choice in event.get("choices", []):
+                    if not isinstance(choice, dict):
+                        continue
+                    delta = choice.get("delta") or {}
+                    if not isinstance(delta, dict):
+                        delta = {}
+                    if isinstance(delta.get("role"), str):
+                        role = delta["role"]
+                    reasoning_delta = delta.get("reasoning_content")
+                    if isinstance(reasoning_delta, str):
+                        reasoning_parts.append(reasoning_delta)
                         if request_id is not None:
-                            self.metrics.append_progress(request_id, output_delta=content_delta)
-                    else:
-                        parsed_reasoning, parsed_content = gemma_parser.feed(content_delta)
-                        for piece in parsed_reasoning:
-                            reasoning_parts.append(piece)
+                            self.metrics.append_progress(request_id, reasoning_delta=reasoning_delta)
+                    content_delta = delta.get("content")
+                    if isinstance(content_delta, str):
+                        if gemma_parser is None:
+                            output_parts.append(content_delta)
                             if request_id is not None:
-                                self.metrics.append_progress(request_id, reasoning_delta=piece)
-                        for piece in parsed_content:
-                            output_parts.append(piece)
-                            if request_id is not None:
-                                self.metrics.append_progress(request_id, output_delta=piece)
-                if isinstance(choice.get("finish_reason"), str):
-                    finish_reason = choice["finish_reason"]
+                                self.metrics.append_progress(request_id, output_delta=content_delta)
+                        else:
+                            parsed_reasoning, parsed_content = gemma_parser.feed(content_delta)
+                            for piece in parsed_reasoning:
+                                reasoning_parts.append(piece)
+                                if request_id is not None:
+                                    self.metrics.append_progress(request_id, reasoning_delta=piece)
+                            for piece in parsed_content:
+                                output_parts.append(piece)
+                                if request_id is not None:
+                                    self.metrics.append_progress(request_id, output_delta=piece)
+                    if isinstance(choice.get("finish_reason"), str):
+                        finish_reason = choice["finish_reason"]
+        except httpx.RemoteProtocolError:
+            partial_output = bool(reasoning_parts or output_parts)
+            if not partial_output:
+                raise
+            log_event(
+                self.logger,
+                "buffered_stream_truncated",
+                model=model,
+                request_id=request_id,
+                had_usage=bool(usage),
+                output_chars=len("".join(output_parts)),
+                reasoning_chars=len("".join(reasoning_parts)),
+            )
 
         if gemma_parser is not None:
             final_reasoning, final_content = gemma_parser.finish()
@@ -970,13 +989,27 @@ class ProxyService:
                     service_started_at=service_started_at,
                     model=self.scheduler.runtime.normalize_alias(requested_model),
                 )
-                yield
+                try:
+                    async with asyncio.timeout(self.settings.active_request_timeout_seconds):
+                        yield
+                except TimeoutError as exc:
+                    raise ActiveRequestTimeoutError(
+                        "active request exceeded timeout after "
+                        f"{self.settings.active_request_timeout_seconds:g}s"
+                    ) from exc
             return
 
         await self._upstream_slots.acquire()
         service_started_at = time.time()
         self.metrics.update_request(request_id, service_started_at=service_started_at)
         try:
-            yield
+            try:
+                async with asyncio.timeout(self.settings.active_request_timeout_seconds):
+                    yield
+            except TimeoutError as exc:
+                raise ActiveRequestTimeoutError(
+                    "active request exceeded timeout after "
+                    f"{self.settings.active_request_timeout_seconds:g}s"
+                ) from exc
         finally:
             self._upstream_slots.release()

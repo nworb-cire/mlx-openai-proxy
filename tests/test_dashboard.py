@@ -8,3 +8,5 @@ def test_dashboard_rolling_average_uses_invocation_timestamps() -> None:
     assert "for (let sample = firstSample;" not in html
     assert "entry.points.forEach((point, index) => {" in html
     assert "points.push({ x: point.x, y: sum / windowCount, model: entry.model });" in html
+    assert 'id="loaded-model"' in html
+    assert "summary.loaded_model || 'unknown'" in html
