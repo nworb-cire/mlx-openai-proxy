@@ -288,141 +288,145 @@ class ProxyService:
         classification: RequestClassification,
         request_id: str,
     ) -> AsyncIterator[bytes]:
-        schema = extract_json_schema(original_body)
-        if schema is None:
-            raise ValueError("Structured execution requires a JSON schema")
-        validate_incoming_schema(schema)
+        try:
+            schema = extract_json_schema(original_body)
+            if schema is None:
+                raise ValueError("Structured execution requires a JSON schema")
+            validate_incoming_schema(schema)
 
-        response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-        created = int(time.time())
-        model = original_body.get("model")
-        stream_include_usage = bool(
-            original_body.get("stream_options", {}).get("include_usage")
-        )
+            response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+            created = int(time.time())
+            model = original_body.get("model")
+            stream_include_usage = bool(
+                original_body.get("stream_options", {}).get("include_usage")
+            )
 
-        reasoning_visible: list[str] = []
-        content_accumulator: list[str] = []
-        phase1_usage: dict[str, Any] = {}
-        phase1_started = time.perf_counter()
+            reasoning_visible: list[str] = []
+            content_accumulator: list[str] = []
+            phase1_usage: dict[str, Any] = {}
+            phase1_started = time.perf_counter()
 
-        yield self._sse(
-            {
-                "id": response_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-            }
-        )
+            yield self._sse(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                }
+            )
 
-        async with self._service_slot(request_id, original_body.get("model")):
-            async for event in self.backend.post_stream(
-                "/chat/completions",
-                self._make_phase1_body(original_body, stream=True),
-            ):
-                if event is None:
-                    break
-                if "usage" in event:
-                    phase1_usage = event.get("usage", {})
-                choice = (event.get("choices") or [{}])[0]
-                delta = choice.get("delta", {})
-                reasoning_delta = delta.get("reasoning_content")
-                if isinstance(reasoning_delta, str):
-                    reasoning_visible.append(reasoning_delta)
-                    self.metrics.append_progress(
-                        request_id,
-                        reasoning_delta=reasoning_delta,
-                    )
-                    if self.settings.reasoning_visibility != ReasoningVisibility.OFF:
-                        yield self._sse(
-                            {
-                                "id": response_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": model,
-                                "choices": [
-                                    {
-                                        "index": 0,
-                                        "delta": {"reasoning_content": reasoning_delta},
-                                        "finish_reason": None,
-                                    }
-                                ],
-                            }
+            async with self._service_slot(request_id, original_body.get("model")):
+                async for event in self.backend.post_stream(
+                    "/chat/completions",
+                    self._make_phase1_body(original_body, stream=True),
+                ):
+                    if event is None:
+                        break
+                    if "usage" in event:
+                        phase1_usage = event.get("usage", {})
+                    choice = (event.get("choices") or [{}])[0]
+                    delta = choice.get("delta", {})
+                    reasoning_delta = delta.get("reasoning_content")
+                    if isinstance(reasoning_delta, str):
+                        reasoning_visible.append(reasoning_delta)
+                        self.metrics.append_progress(
+                            request_id,
+                            reasoning_delta=reasoning_delta,
                         )
-                content_delta = delta.get("content")
-                if isinstance(content_delta, str):
-                    content_accumulator.append(content_delta)
-                    self.metrics.append_progress(
-                        request_id,
-                        output_delta=content_delta,
-                    )
+                        if self.settings.reasoning_visibility != ReasoningVisibility.OFF:
+                            yield self._sse(
+                                {
+                                    "id": response_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": model,
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {"reasoning_content": reasoning_delta},
+                                            "finish_reason": None,
+                                        }
+                                    ],
+                                }
+                            )
+                    content_delta = delta.get("content")
+                    if isinstance(content_delta, str):
+                        content_accumulator.append(content_delta)
+                        self.metrics.append_progress(
+                            request_id,
+                            output_delta=content_delta,
+                        )
 
-            canonical_answer = "".join(content_accumulator).strip()
-            phase1_elapsed = time.perf_counter() - phase1_started
-            phase2_started = time.perf_counter()
-            phase2_response, final_json_text = await self._run_phase2(
-                original_body=original_body,
-                schema=schema,
-                canonical_answer=canonical_answer,
-            )
-            phase2_elapsed = time.perf_counter() - phase2_started
-            phase2_usage = phase2_response.get("usage", {})
+                canonical_answer = "".join(content_accumulator).strip()
+                phase1_elapsed = time.perf_counter() - phase1_started
+                phase2_started = time.perf_counter()
+                phase2_response, final_json_text = await self._run_phase2(
+                    original_body=original_body,
+                    schema=schema,
+                    canonical_answer=canonical_answer,
+                )
+                phase2_elapsed = time.perf_counter() - phase2_started
+                phase2_usage = phase2_response.get("usage", {})
 
-        for chunk in chunk_text(final_json_text, self.settings.final_chunk_size):
+            for chunk in chunk_text(final_json_text, self.settings.final_chunk_size):
+                yield self._sse(
+                    {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+                    }
+                )
+
+            if stream_include_usage:
+                yield self._sse(
+                    {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [],
+                        "usage": self._merge_usage(phase1_usage, phase2_usage),
+                    }
+                )
+
             yield self._sse(
                 {
                     "id": response_id,
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
-                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 }
             )
+            yield b"data: [DONE]\n\n"
 
-        if stream_include_usage:
-            yield self._sse(
-                {
-                    "id": response_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [],
-                    "usage": self._merge_usage(phase1_usage, phase2_usage),
-                }
+            log_event(
+                self.logger,
+                "structured_stream_completed",
+                model=model,
+                execution_path=classification.execution_path,
+                phase1_completion_tokens=phase1_usage.get("completion_tokens"),
+                phase2_completion_tokens=phase2_usage.get("completion_tokens"),
             )
-
-        yield self._sse(
-            {
-                "id": response_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-        )
-        yield b"data: [DONE]\n\n"
-
-        log_event(
-            self.logger,
-            "structured_stream_completed",
-            model=model,
-            execution_path=classification.execution_path,
-            phase1_completion_tokens=phase1_usage.get("completion_tokens"),
-            phase2_completion_tokens=phase2_usage.get("completion_tokens"),
-        )
-        self.metrics.complete_request(
-            request_id,
-            prompt_tokens=(phase1_usage.get("prompt_tokens") or 0)
-            + (phase2_usage.get("prompt_tokens") or 0),
-            completion_tokens=(phase1_usage.get("completion_tokens") or 0)
-            + (phase2_usage.get("completion_tokens") or 0),
-            reasoning_tokens=((phase1_usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
-            + ((phase2_usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
-            output_chars=len(final_json_text),
-            reasoning_chars=len("".join(reasoning_visible)),
-            phase1_latency_ms=int(phase1_elapsed * 1000),
-            phase2_latency_ms=int(phase2_elapsed * 1000),
-        )
+            self.metrics.complete_request(
+                request_id,
+                prompt_tokens=(phase1_usage.get("prompt_tokens") or 0)
+                + (phase2_usage.get("prompt_tokens") or 0),
+                completion_tokens=(phase1_usage.get("completion_tokens") or 0)
+                + (phase2_usage.get("completion_tokens") or 0),
+                reasoning_tokens=((phase1_usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+                + ((phase2_usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
+                output_chars=len(final_json_text),
+                reasoning_chars=len("".join(reasoning_visible)),
+                phase1_latency_ms=int(phase1_elapsed * 1000),
+                phase2_latency_ms=int(phase2_elapsed * 1000),
+            )
+        except Exception as exc:
+            self.metrics.fail_request(request_id, error_message=str(exc))
+            raise
 
     async def _responses_stream(self, chat_body: dict[str, Any], request_id: str) -> AsyncIterator[bytes]:
         response_id = f"resp_{uuid.uuid4().hex}"
@@ -538,117 +542,121 @@ class ProxyService:
         body: dict[str, Any],
         request_id: str,
     ) -> AsyncIterator[bytes]:
-        usage: dict[str, Any] = {}
-        reasoning_parts: list[str] = []
-        output_parts: list[str] = []
-        gemma_parser = self._make_gemma_stream_parser(body.get("model"))
-        async with self._service_slot(request_id, body.get("model")):
-            async for event in self.backend.post_stream("/chat/completions", body):
-                if event is None:
-                    break
-                if "usage" in event:
-                    usage = event.get("usage", {})
-                    yield self._sse(event)
-                    continue
-                if gemma_parser is None:
+        try:
+            usage: dict[str, Any] = {}
+            reasoning_parts: list[str] = []
+            output_parts: list[str] = []
+            gemma_parser = self._make_gemma_stream_parser(body.get("model"))
+            async with self._service_slot(request_id, body.get("model")):
+                async for event in self.backend.post_stream("/chat/completions", body):
+                    if event is None:
+                        break
+                    if "usage" in event:
+                        usage = event.get("usage", {})
+                        yield self._sse(event)
+                        continue
+                    if gemma_parser is None:
+                        for choice in event.get("choices", []):
+                            delta = choice.get("delta", {})
+                            reasoning = delta.get("reasoning_content")
+                            if isinstance(reasoning, str):
+                                reasoning_parts.append(reasoning)
+                                self.metrics.append_progress(
+                                    request_id,
+                                    reasoning_delta=reasoning,
+                                )
+                            content = delta.get("content")
+                            if isinstance(content, str):
+                                output_parts.append(content)
+                                self.metrics.append_progress(
+                                    request_id,
+                                    output_delta=content,
+                                )
+                        yield self._sse(event)
+                        continue
                     for choice in event.get("choices", []):
+                        if not isinstance(choice, dict):
+                            continue
                         delta = choice.get("delta", {})
+                        if not isinstance(delta, dict):
+                            delta = {}
+                        index = int(choice.get("index") or 0)
+                        if isinstance(delta.get("role"), str):
+                            yield self._sse(
+                                self._stream_event_from_choice(
+                                    event,
+                                    index=index,
+                                    delta={"role": delta["role"]},
+                                    finish_reason=None,
+                                )
+                            )
                         reasoning = delta.get("reasoning_content")
                         if isinstance(reasoning, str):
                             reasoning_parts.append(reasoning)
-                            self.metrics.append_progress(
-                                request_id,
-                                reasoning_delta=reasoning,
-                            )
-                        content = delta.get("content")
-                        if isinstance(content, str):
-                            output_parts.append(content)
-                            self.metrics.append_progress(
-                                request_id,
-                                output_delta=content,
-                            )
-                    yield self._sse(event)
-                    continue
-                for choice in event.get("choices", []):
-                    if not isinstance(choice, dict):
-                        continue
-                    delta = choice.get("delta", {})
-                    if not isinstance(delta, dict):
-                        delta = {}
-                    index = int(choice.get("index") or 0)
-                    if isinstance(delta.get("role"), str):
-                        yield self._sse(
-                            self._stream_event_from_choice(
-                                event,
-                                index=index,
-                                delta={"role": delta["role"]},
-                                finish_reason=None,
-                            )
-                        )
-                    reasoning = delta.get("reasoning_content")
-                    if isinstance(reasoning, str):
-                        reasoning_parts.append(reasoning)
-                        self.metrics.append_progress(request_id, reasoning_delta=reasoning)
-                        yield self._sse(
-                            self._stream_event_from_choice(
-                                event,
-                                index=index,
-                                delta={"reasoning_content": reasoning},
-                                finish_reason=None,
-                            )
-                        )
-                    content_delta = delta.get("content")
-                    if isinstance(content_delta, str):
-                        parsed_reasoning, parsed_content = gemma_parser.feed(content_delta)
-                        for piece in parsed_reasoning:
-                            reasoning_parts.append(piece)
-                            self.metrics.append_progress(request_id, reasoning_delta=piece)
+                            self.metrics.append_progress(request_id, reasoning_delta=reasoning)
                             yield self._sse(
                                 self._stream_event_from_choice(
                                     event,
                                     index=index,
-                                    delta={"reasoning_content": piece},
+                                    delta={"reasoning_content": reasoning},
                                     finish_reason=None,
                                 )
                             )
-                        for piece in parsed_content:
-                            output_parts.append(piece)
-                            self.metrics.append_progress(request_id, output_delta=piece)
+                        content_delta = delta.get("content")
+                        if isinstance(content_delta, str):
+                            parsed_reasoning, parsed_content = gemma_parser.feed(content_delta)
+                            for piece in parsed_reasoning:
+                                reasoning_parts.append(piece)
+                                self.metrics.append_progress(request_id, reasoning_delta=piece)
+                                yield self._sse(
+                                    self._stream_event_from_choice(
+                                        event,
+                                        index=index,
+                                        delta={"reasoning_content": piece},
+                                        finish_reason=None,
+                                    )
+                                )
+                            for piece in parsed_content:
+                                output_parts.append(piece)
+                                self.metrics.append_progress(request_id, output_delta=piece)
+                                yield self._sse(
+                                    self._stream_event_from_choice(
+                                        event,
+                                        index=index,
+                                        delta={"content": piece},
+                                        finish_reason=None,
+                                    )
+                                )
+                        finish_reason = choice.get("finish_reason")
+                        if finish_reason is not None:
                             yield self._sse(
                                 self._stream_event_from_choice(
                                     event,
                                     index=index,
-                                    delta={"content": piece},
-                                    finish_reason=None,
+                                    delta={},
+                                    finish_reason=finish_reason,
                                 )
                             )
-                    finish_reason = choice.get("finish_reason")
-                    if finish_reason is not None:
-                        yield self._sse(
-                            self._stream_event_from_choice(
-                                event,
-                                index=index,
-                                delta={},
-                                finish_reason=finish_reason,
-                            )
-                        )
-        if gemma_parser is not None:
-            final_reasoning, final_content = gemma_parser.finish()
-            for piece in final_reasoning:
-                reasoning_parts.append(piece)
-                self.metrics.append_progress(request_id, reasoning_delta=piece)
-            for piece in final_content:
-                output_parts.append(piece)
-                self.metrics.append_progress(request_id, output_delta=piece)
-        yield b"data: [DONE]\n\n"
-        self.metrics.complete_request(
-            request_id,
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            reasoning_tokens=(usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
-            output_chars=len("".join(output_parts)),
-            reasoning_chars=len("".join(reasoning_parts)),
-        )
+            if gemma_parser is not None:
+                final_reasoning, final_content = gemma_parser.finish()
+                for piece in final_reasoning:
+                    reasoning_parts.append(piece)
+                    self.metrics.append_progress(request_id, reasoning_delta=piece)
+                for piece in final_content:
+                    output_parts.append(piece)
+                    self.metrics.append_progress(request_id, output_delta=piece)
+            yield b"data: [DONE]\n\n"
+            self.metrics.complete_request(
+                request_id,
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                reasoning_tokens=(usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+                output_chars=len("".join(output_parts)),
+                reasoning_chars=len("".join(reasoning_parts)),
+            )
+        except Exception as exc:
+            self.metrics.fail_request(request_id, error_message=str(exc))
+            raise
 
     async def _buffered_chat_completion(
         self,
