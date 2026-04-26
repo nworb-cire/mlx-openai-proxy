@@ -10,6 +10,57 @@ The proxy is especially useful when you want to run models locally without rewri
 
 In practice, this project is meant to sit on top of `LM Studio`. `LM Studio` handles loading and serving the local MLX-backed models, while this proxy adds the OpenAI-compatible interface, request routing, and observability layer in front of it.
 
+## Quickstart
+
+Prerequisites:
+
+- Apple Silicon Mac
+- `LM Studio` with the `lms` CLI installed
+- `uv` for Python dependency management
+
+Install the project and development dependencies:
+
+```sh
+uv sync --extra dev
+```
+
+Run the test suite:
+
+```sh
+uv run pytest
+```
+
+Start `LM Studio` and the proxy together:
+
+```sh
+bin/start-stack.sh
+```
+
+By default, the helper script starts the `LM Studio` backend on `127.0.0.1:8097` and the OpenAI-compatible proxy on `0.0.0.0:8080`.
+
+List available models:
+
+```sh
+curl http://127.0.0.1:8080/v1/models
+```
+
+Send a chat completion request:
+
+```sh
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gemma4:e2b",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
+  }'
+```
+
+Open the dashboard at:
+
+```text
+http://127.0.0.1:8080/admin/dashboard
+```
+
 ## What It Is Used For
 
 Use this project when you want to:
@@ -27,6 +78,8 @@ This repo also supports serving multiple configured models through one OpenAI-co
 The served model set is configured as a JSON list. Each entry controls the LM Studio model key, exposed alias, context length, and parallelism.
 
 To add or remove a served model, edit `config/models.json` and restart the proxy.
+
+You can also point the proxy at another model config file with `MLX_PROXY_MODEL_CONFIG_PATH`.
 
 ## In Practice
 
