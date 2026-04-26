@@ -16,6 +16,18 @@ class ModelSpec:
     parallel: int
 
 
+def configured_model_specs(settings: Settings) -> dict[str, ModelSpec]:
+    return {
+        model.alias: ModelSpec(
+            alias=model.alias,
+            key=model.key,
+            context_length=model.context_length,
+            parallel=model.parallel,
+        )
+        for model in settings.models
+    }
+
+
 class ModelRuntimeError(RuntimeError):
     pass
 
@@ -23,26 +35,11 @@ class ModelRuntimeError(RuntimeError):
 class ModelRuntimeManager:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._specs = {
-            settings.default_model_alias: ModelSpec(
-                alias=settings.default_model_alias,
-                key=settings.default_model_key,
-                context_length=settings.default_model_context_length,
-                parallel=settings.default_model_parallel,
-            ),
-            settings.burst_model_alias: ModelSpec(
-                alias=settings.burst_model_alias,
-                key=settings.burst_model_key,
-                context_length=settings.burst_model_context_length,
-                parallel=settings.burst_model_parallel,
-            ),
-        }
-        self._aliases_by_input = {
-            settings.default_model_alias.lower(): settings.default_model_alias,
-            settings.default_model_key.lower(): settings.default_model_alias,
-            settings.burst_model_alias.lower(): settings.burst_model_alias,
-            settings.burst_model_key.lower(): settings.burst_model_alias,
-        }
+        self._specs = configured_model_specs(settings)
+        self._aliases_by_input = {}
+        for alias, spec in self._specs.items():
+            self._aliases_by_input[alias.lower()] = alias
+            self._aliases_by_input[spec.key.lower()] = alias
         self._active_alias = settings.default_model_alias
         self._lock = asyncio.Lock()
 

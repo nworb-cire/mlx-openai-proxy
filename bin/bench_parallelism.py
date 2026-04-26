@@ -460,16 +460,27 @@ def start_proxy(
     proxy_bin: str,
     proxy_port: int,
     backend_port: int,
+    model: str,
+    model_key: str,
+    context_length: int,
     model_parallel: int,
     metrics_db_path: Path,
     log_path: Path,
 ) -> subprocess.Popen[bytes]:
+    models = [
+        {
+            "alias": model,
+            "key": model_key,
+            "context_length": context_length,
+            "parallel": model_parallel,
+        }
+    ]
     env = os.environ.copy()
     env.update(
         {
             "MLX_PROXY_BACKEND_BASE_URL": f"http://127.0.0.1:{backend_port}/v1",
             "MLX_PROXY_MAX_UPSTREAM_CONCURRENCY": str(model_parallel),
-            "MLX_PROXY_DEFAULT_MODEL_PARALLEL": str(model_parallel),
+            "MLX_PROXY_MODELS": json.dumps(models),
             "MLX_PROXY_METRICS_DB_PATH": str(metrics_db_path),
             "MLX_PROXY_LOG_LEVEL": "WARNING",
         }
@@ -646,6 +657,9 @@ def main() -> None:
             proxy_bin=args.proxy_bin,
             proxy_port=args.proxy_port,
             backend_port=args.backend_port,
+            model=args.model,
+            model_key=args.model_key,
+            context_length=args.context_length,
             model_parallel=parallel,
             metrics_db_path=metrics_db_path,
             log_path=proxy_log_path,

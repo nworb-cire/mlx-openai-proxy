@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mlx_openai_proxy.config import Settings
+from mlx_openai_proxy.config import ConfiguredModel, Settings
 from mlx_openai_proxy.model_runtime import ModelRuntimeManager
 
 
@@ -60,3 +60,52 @@ async def test_normalize_residency_loads_default_when_nothing_loaded() -> None:
 
     assert chosen == settings.default_model_alias
     assert runtime.loaded_aliases == [settings.default_model_alias]
+
+
+def test_default_model_list_is_advertised() -> None:
+    runtime = FakeRuntime(Settings(), loaded_aliases=[])
+
+    model_ids = [item["id"] for item in runtime.advertised_models()["data"]]
+
+    assert model_ids == ["gemma4:e2b", "gemma4:26b"]
+
+
+def test_model_list_can_be_overridden() -> None:
+    settings = Settings(
+        models=[
+            ConfiguredModel(alias="small", key="local/small", parallel=2),
+            ConfiguredModel(alias="large", key="local/large"),
+        ]
+    )
+    runtime = FakeRuntime(settings, loaded_aliases=[])
+
+    model_ids = [item["id"] for item in runtime.advertised_models()["data"]]
+
+    assert model_ids == ["small", "large"]
+    assert runtime.normalize_alias("local/large") == "large"
+
+
+@pytest.mark.asyncio
+async def test_switch_to_configured_model_loads_its_spec() -> None:
+    settings = Settings(
+        models=[
+            ConfiguredModel(alias="small", key="local/small", parallel=2),
+            ConfiguredModel(alias="large", key="local/large", context_length=4096),
+        ]
+    )
+    runtime = FakeRuntime(settings, loaded_aliases=["small"])
+
+    await runtime.switch_to("large")
+
+    assert runtime.loaded_aliases == ["large"]
+    assert (
+        "load",
+        "local/large",
+        "--identifier",
+        "large",
+        "-c",
+        "4096",
+        "--parallel",
+        "1",
+        "-y",
+    ) in runtime.commands

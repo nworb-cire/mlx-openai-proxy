@@ -20,11 +20,13 @@ Use this project when you want to:
 - observe local model traffic through a lightweight dashboard and request metrics
 - manage a small local serving stack where `LM Studio` runs the models and the proxy coordinates how clients reach them
 
-## Burst Workflow
+## Model Routing
 
-This repo also includes a burst workflow for handling requests that should run on a larger or different model than the normal default.
+This repo also supports serving multiple configured models through one OpenAI-compatible API surface. When a request targets a configured model that is not currently loaded, the proxy switches `LM Studio` to that model on demand.
 
-At a high level, the proxy keeps a default model ready for ordinary traffic. When a request targets the burst model, the proxy can switch `LM Studio` over to that model and keep the most recently used model loaded after the burst work is finished. The purpose is to make it practical to keep a lighter everyday model available while still being able to switch into a heavier model when needed without immediately flipping back on idle.
+The served model set is configured as a JSON list. Each entry controls the LM Studio model key, exposed alias, context length, and parallelism.
+
+To add or remove a served model, edit `config/models.json` and restart the proxy.
 
 ## In Practice
 

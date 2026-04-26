@@ -1,0 +1,14 @@
+[
+  {
+    "alias": "gemma4:e2b",
+    "key": "google/gemma-4-e2b",
+    "context_length": 8192,
+    "parallel": 2
+  },
+  {
+    "alias": "gemma4:26b",
+    "key": "google/gemma-4-26b-a4b",
+    "context_length": 8192,
+    "parallel": 1
+  }
+]

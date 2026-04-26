@@ -18,6 +18,7 @@ from .config import ReasoningVisibility, Settings
 from .images import normalize_chat_images, normalize_responses_input
 from .logging_utils import log_event
 from .metrics_store import MetricsStore
+from .model_runtime import configured_model_specs
 from .model_scheduler import ModelScheduler
 from .prompting import (
     build_phase1_messages,
@@ -137,19 +138,12 @@ class ProxyService:
     async def models(self) -> dict[str, Any]:
         if self.scheduler is not None:
             return self.scheduler.runtime.advertised_models()
+        specs = configured_model_specs(self.settings)
         return {
             "object": "list",
             "data": [
-                {
-                    "id": self.settings.default_model_alias,
-                    "object": "model",
-                    "owned_by": "organization_owner",
-                },
-                {
-                    "id": self.settings.burst_model_alias,
-                    "object": "model",
-                    "owned_by": "organization_owner",
-                },
+                {"id": alias, "object": "model", "owned_by": "organization_owner"}
+                for alias in specs
             ],
         }
 
