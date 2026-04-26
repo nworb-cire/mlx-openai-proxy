@@ -61,6 +61,23 @@ Open the dashboard at:
 http://127.0.0.1:8080/admin/dashboard
 ```
 
+## Configuration
+
+Runtime settings are read from environment variables with the `MLX_PROXY_` prefix. You can copy `.env.example` to `.env` for local overrides when running the Python entrypoint directly.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `MLX_PROXY_HOST` | `0.0.0.0` | Interface the proxy binds to. |
+| `MLX_PROXY_PORT` | `8090` | Port used by the Python entrypoint. `bin/start-stack.sh` overrides this to `8080`. |
+| `MLX_PROXY_BACKEND_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible backend URL. `bin/start-stack.sh` starts LM Studio on `127.0.0.1:8097` and points the proxy there. |
+| `MLX_PROXY_MODEL_CONFIG_PATH` | `config/models.json` | JSON file containing the served model aliases and LM Studio model keys. |
+| `MLX_PROXY_METRICS_DB_PATH` | `~/.local/share/mlx-openai-proxy/metrics.db` | SQLite database used for request history and dashboard metrics. |
+| `MLX_PROXY_LM_STUDIO_BIN` | discovered `lms` or `~/.lmstudio/bin/lms` | LM Studio CLI used for model residency management. |
+| `MLX_PROXY_MAX_UPSTREAM_CONCURRENCY` | `2` | Maximum number of concurrent upstream model requests. |
+| `MLX_PROXY_BACKEND_TIMEOUT_SECONDS` | `600` | HTTP timeout for backend requests. |
+| `MLX_PROXY_ACTIVE_REQUEST_TIMEOUT_SECONDS` | `600` | Maximum active request runtime before the proxy returns a timeout. |
+| `MLX_PROXY_LOG_LEVEL` | `INFO` | Python logging level. |
+
 ## What It Is Used For
 
 Use this project when you want to:
