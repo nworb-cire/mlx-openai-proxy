@@ -104,7 +104,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content={"error": {"message": exc.detail}})
+        return JSONResponse(
+            status_code=exc.status_code, content={"error": {"message": exc.detail}}
+        )
 
     return app
 

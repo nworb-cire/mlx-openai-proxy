@@ -28,7 +28,9 @@ def test_parser_handles_leading_newline_before_thought_tag() -> None:
 
 
 def test_parser_handles_split_tag_with_leading_whitespace() -> None:
-    reasoning, content = _parse("  ", "<|channel>thought", "hello", "<channel|>", "world")
+    reasoning, content = _parse(
+        "  ", "<|channel>thought", "hello", "<channel|>", "world"
+    )
     assert reasoning == "  hello"
     assert content == "world"
 

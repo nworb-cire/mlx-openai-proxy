@@ -86,7 +86,9 @@ class Settings(BaseSettings):
     model_config_path: str = Field(default_factory=_default_model_config_path)
     models: list[ConfiguredModel] = Field(default_factory=_default_models)
 
-    reasoning_visibility: ReasoningVisibility = Field(default=ReasoningVisibility.COMPATIBLE)
+    reasoning_visibility: ReasoningVisibility = Field(
+        default=ReasoningVisibility.COMPATIBLE
+    )
     schema_mode: StructuredMode = Field(default=StructuredMode.AUTO)
     phase2_max_tokens: int = Field(default=1024)
     phase2_temperature: float = Field(default=0.0)
@@ -116,7 +118,9 @@ class Settings(BaseSettings):
     def model_post_init(self, __context: object) -> None:
         field_set = self.model_fields_set
         if "models" not in field_set and "model_config_path" in field_set:
-            self.models = self.validate_models(_load_models_from_path(Path(self.model_config_path)))
+            self.models = self.validate_models(
+                _load_models_from_path(Path(self.model_config_path))
+            )
 
     @computed_field
     @property

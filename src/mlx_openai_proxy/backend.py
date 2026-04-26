@@ -46,7 +46,9 @@ class BackendClient:
                     break
                 yield json.loads(payload)
 
-    async def proxy_stream(self, path: str, body: dict[str, Any]) -> AsyncIterator[bytes]:
+    async def proxy_stream(
+        self, path: str, body: dict[str, Any]
+    ) -> AsyncIterator[bytes]:
         async with self._client.stream("POST", path, json=body) as response:
             await self._raise_for_status_async(response)
             async for chunk in response.aiter_raw():

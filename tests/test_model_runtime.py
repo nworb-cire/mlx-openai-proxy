@@ -20,7 +20,9 @@ class FakeRuntime(ModelRuntimeManager):
 
             return json.dumps(items)
         if args and args[0] == "unload":
-            self.loaded_aliases = [alias for alias in self.loaded_aliases if alias != args[1]]
+            self.loaded_aliases = [
+                alias for alias in self.loaded_aliases if alias != args[1]
+            ]
             return ""
         if args and args[0] == "load":
             alias = args[args.index("--identifier") + 1]
@@ -30,7 +32,9 @@ class FakeRuntime(ModelRuntimeManager):
 
 
 @pytest.mark.asyncio
-async def test_switch_to_unloads_extra_loaded_models_when_target_already_loaded() -> None:
+async def test_switch_to_unloads_extra_loaded_models_when_target_already_loaded() -> (
+    None
+):
     settings = Settings()
     runtime = FakeRuntime(settings, loaded_aliases=["gemma4:26b", "gemma4:e2b"])
 

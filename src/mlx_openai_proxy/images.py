@@ -15,7 +15,11 @@ def _path_to_data_url(path: Path) -> str:
 
 
 def _normalize_image_url(url: str, max_inline_image_bytes: int) -> str:
-    if url.startswith("http://") or url.startswith("https://") or url.startswith("data:"):
+    if (
+        url.startswith("http://")
+        or url.startswith("https://")
+        or url.startswith("data:")
+    ):
         return url
 
     if url.startswith("file://"):
@@ -31,7 +35,9 @@ def _normalize_image_url(url: str, max_inline_image_bytes: int) -> str:
     return _path_to_data_url(path)
 
 
-def normalize_chat_images(body: dict[str, Any], max_inline_image_bytes: int) -> dict[str, Any]:
+def normalize_chat_images(
+    body: dict[str, Any], max_inline_image_bytes: int
+) -> dict[str, Any]:
     messages = body.get("messages")
     if not isinstance(messages, list):
         return body
@@ -52,7 +58,9 @@ def normalize_chat_images(body: dict[str, Any], max_inline_image_bytes: int) -> 
                 continue
             if part.get("type") == "image_url":
                 image_url = part.get("image_url")
-                if isinstance(image_url, dict) and isinstance(image_url.get("url"), str):
+                if isinstance(image_url, dict) and isinstance(
+                    image_url.get("url"), str
+                ):
                     updated = dict(part)
                     updated["image_url"] = dict(image_url)
                     updated["image_url"]["url"] = _normalize_image_url(
@@ -70,7 +78,9 @@ def normalize_chat_images(body: dict[str, Any], max_inline_image_bytes: int) -> 
     return new_body
 
 
-def normalize_responses_input(body: dict[str, Any], max_inline_image_bytes: int) -> dict[str, Any]:
+def normalize_responses_input(
+    body: dict[str, Any], max_inline_image_bytes: int
+) -> dict[str, Any]:
     payload = body.get("input")
     if isinstance(payload, str):
         return body

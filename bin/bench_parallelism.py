@@ -83,13 +83,21 @@ def ensure_model_parallel(
 ) -> None:
     loaded = parse_lms_ps(lms_bin)
     for item in loaded:
-        if item.get("identifier") == alias and int(item.get("parallel", 0) or 0) == parallel:
+        if (
+            item.get("identifier") == alias
+            and int(item.get("parallel", 0) or 0) == parallel
+        ):
             return
 
     for item in loaded:
         identifier = item.get("identifier")
         if isinstance(identifier, str):
-            subprocess.run([lms_bin, "unload", identifier], check=False, capture_output=True, text=True)
+            subprocess.run(
+                [lms_bin, "unload", identifier],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
     run_command(
         [
@@ -224,7 +232,9 @@ class Sampler:
             pages_stored_in_compressor=vm.get("pages_stored_in_compressor"),
             pageouts=vm.get("pageouts"),
             swapouts=vm.get("swapouts"),
-            server_rss_bytes=process_tree_rss_bytes(find_listener_pid(self.backend_port)),
+            server_rss_bytes=process_tree_rss_bytes(
+                find_listener_pid(self.backend_port)
+            ),
         )
 
 
@@ -289,7 +299,9 @@ def percentile(values: list[float], p: float) -> float | None:
 
 
 def make_payload(model: str, max_tokens: int, request_index: int) -> bytes:
-    long_reference = "\n\n".join(f"Document {i}:\n{REFERENCE_BLOCK}" for i in range(1, 13))
+    long_reference = "\n\n".join(
+        f"Document {i}:\n{REFERENCE_BLOCK}" for i in range(1, 13)
+    )
     body = {
         "model": model,
         "stream": True,
@@ -375,7 +387,9 @@ def execute_request(
                     response_chars += len(content)
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
-            reasoning_tokens = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            reasoning_tokens = (usage.get("completion_tokens_details") or {}).get(
+                "reasoning_tokens"
+            )
             total_latency = time.perf_counter() - started
             if (
                 first_decode_seconds is None
@@ -389,21 +403,41 @@ def execute_request(
                     latency_seconds=total_latency,
                     time_to_first_decode_seconds=first_decode_seconds,
                     status_code=getattr(response, "status", 200),
-                    prompt_tokens=prompt_tokens if isinstance(prompt_tokens, int) else None,
-                    completion_tokens=completion_tokens if isinstance(completion_tokens, int) else None,
-                    reasoning_tokens=reasoning_tokens if isinstance(reasoning_tokens, int) else None,
-                    total_tokens=usage.get("total_tokens") if isinstance(usage.get("total_tokens"), int) else None,
+                    prompt_tokens=prompt_tokens
+                    if isinstance(prompt_tokens, int)
+                    else None,
+                    completion_tokens=completion_tokens
+                    if isinstance(completion_tokens, int)
+                    else None,
+                    reasoning_tokens=reasoning_tokens
+                    if isinstance(reasoning_tokens, int)
+                    else None,
+                    total_tokens=usage.get("total_tokens")
+                    if isinstance(usage.get("total_tokens"), int)
+                    else None,
                     input_tps=None,
                     decode_tps=None,
                     response_chars=response_chars,
                     error="stream ended without usable decode tokens and usage",
                 )
             input_tps = None
-            if isinstance(prompt_tokens, int) and first_decode_seconds and first_decode_seconds > 0:
+            if (
+                isinstance(prompt_tokens, int)
+                and first_decode_seconds
+                and first_decode_seconds > 0
+            ):
                 input_tps = prompt_tokens / first_decode_seconds
             decode_tps = None
-            decode_window = total_latency - first_decode_seconds if first_decode_seconds is not None else None
-            if isinstance(completion_tokens, int) and decode_window and decode_window > 0:
+            decode_window = (
+                total_latency - first_decode_seconds
+                if first_decode_seconds is not None
+                else None
+            )
+            if (
+                isinstance(completion_tokens, int)
+                and decode_window
+                and decode_window > 0
+            ):
                 decode_tps = completion_tokens / decode_window
             return RequestResult(
                 index=request_index,
@@ -543,15 +577,27 @@ def run_benchmark_level(
 
     succeeded = [item for item in requests if item.ok]
     latencies = [item.latency_seconds for item in succeeded]
-    ttfts = [item.time_to_first_decode_seconds for item in succeeded if item.time_to_first_decode_seconds is not None]
+    ttfts = [
+        item.time_to_first_decode_seconds
+        for item in succeeded
+        if item.time_to_first_decode_seconds is not None
+    ]
     prompt_tokens_total = sum(item.prompt_tokens or 0 for item in succeeded)
     completion_tokens_total = sum(item.completion_tokens or 0 for item in succeeded)
-    input_tps_values = [item.input_tps for item in succeeded if item.input_tps is not None]
-    decode_tps_values = [item.decode_tps for item in succeeded if item.decode_tps is not None]
+    input_tps_values = [
+        item.input_tps for item in succeeded if item.input_tps is not None
+    ]
+    decode_tps_values = [
+        item.decode_tps for item in succeeded if item.decode_tps is not None
+    ]
 
     samples = sampler.samples
-    free_percents = [item.free_percent for item in samples if item.free_percent is not None]
-    rss_values = [item.server_rss_bytes for item in samples if item.server_rss_bytes is not None]
+    free_percents = [
+        item.free_percent for item in samples if item.free_percent is not None
+    ]
+    rss_values = [
+        item.server_rss_bytes for item in samples if item.server_rss_bytes is not None
+    ]
     pageouts = [item.pageouts for item in samples if item.pageouts is not None]
     swapouts = [item.swapouts for item in samples if item.swapouts is not None]
 
@@ -568,7 +614,9 @@ def run_benchmark_level(
         prompt_tokens_total=prompt_tokens_total,
         completion_tokens_total=completion_tokens_total,
         aggregate_input_tps=(
-            prompt_tokens_total / max(ttfts) if ttfts and prompt_tokens_total > 0 else None
+            prompt_tokens_total / max(ttfts)
+            if ttfts and prompt_tokens_total > 0
+            else None
         ),
         aggregate_decode_tps=(
             completion_tokens_total / max(1e-9, batch_wall_seconds - min(ttfts))
@@ -597,13 +645,35 @@ def print_summary(results: list[BenchmarkResult]) -> None:
     print("-" * 116)
     for result in results:
         total = result.completed + result.failed
-        ttft = f"{result.ttft_p50_seconds:.1f}" if result.ttft_p50_seconds is not None else "-"
-        in_tps = f"{result.input_tps_p50:.1f}" if result.input_tps_p50 is not None else "-"
-        dec_tps = f"{result.decode_tps_p50:.1f}" if result.decode_tps_p50 is not None else "-"
-        agg_in = f"{result.aggregate_input_tps:.1f}" if result.aggregate_input_tps is not None else "-"
-        agg_dec = f"{result.aggregate_decode_tps:.1f}" if result.aggregate_decode_tps is not None else "-"
-        rss = f"{result.max_server_rss_gb:.2f}" if result.max_server_rss_gb is not None else "-"
-        free = str(result.min_free_percent) if result.min_free_percent is not None else "-"
+        ttft = (
+            f"{result.ttft_p50_seconds:.1f}"
+            if result.ttft_p50_seconds is not None
+            else "-"
+        )
+        in_tps = (
+            f"{result.input_tps_p50:.1f}" if result.input_tps_p50 is not None else "-"
+        )
+        dec_tps = (
+            f"{result.decode_tps_p50:.1f}" if result.decode_tps_p50 is not None else "-"
+        )
+        agg_in = (
+            f"{result.aggregate_input_tps:.1f}"
+            if result.aggregate_input_tps is not None
+            else "-"
+        )
+        agg_dec = (
+            f"{result.aggregate_decode_tps:.1f}"
+            if result.aggregate_decode_tps is not None
+            else "-"
+        )
+        rss = (
+            f"{result.max_server_rss_gb:.2f}"
+            if result.max_server_rss_gb is not None
+            else "-"
+        )
+        free = (
+            str(result.min_free_percent) if result.min_free_percent is not None else "-"
+        )
         print(
             f"{result.parallel:>8} | "
             f"{result.completed:>2}/{total:<5} | "
@@ -619,15 +689,23 @@ def print_summary(results: list[BenchmarkResult]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark LM Studio model parallelism through the proxy")
-    parser.add_argument("--lms-bin", default=str(Path.home() / ".lmstudio" / "bin" / "lms"))
-    parser.add_argument("--proxy-bin", default=str(Path.cwd() / ".venv" / "bin" / "mlx-openai-proxy"))
+    parser = argparse.ArgumentParser(
+        description="Benchmark LM Studio model parallelism through the proxy"
+    )
+    parser.add_argument(
+        "--lms-bin", default=str(Path.home() / ".lmstudio" / "bin" / "lms")
+    )
+    parser.add_argument(
+        "--proxy-bin", default=str(Path.cwd() / ".venv" / "bin" / "mlx-openai-proxy")
+    )
     parser.add_argument("--backend-port", type=int, default=8097)
     parser.add_argument("--proxy-port", type=int, default=8090)
     parser.add_argument("--model", default="gemma4:e2b")
     parser.add_argument("--model-key", default="google/gemma-4-e2b")
     parser.add_argument("--context-length", type=int, default=8192)
-    parser.add_argument("--parallel-levels", type=int, nargs="+", default=[1, 2, 4, 8, 16, 32, 64, 128])
+    parser.add_argument(
+        "--parallel-levels", type=int, nargs="+", default=[1, 2, 4, 8, 16, 32, 64, 128]
+    )
     parser.add_argument("--max-tokens", type=int, default=384)
     parser.add_argument("--request-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--output-json", default=None)

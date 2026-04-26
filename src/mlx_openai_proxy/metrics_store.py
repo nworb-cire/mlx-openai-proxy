@@ -62,10 +62,14 @@ class MetricsStore:
     def _ensure_column(self, name: str, definition: str) -> None:
         columns = {
             row["name"]
-            for row in self._conn.execute("PRAGMA table_info(request_history)").fetchall()
+            for row in self._conn.execute(
+                "PRAGMA table_info(request_history)"
+            ).fetchall()
         }
         if name not in columns:
-            self._conn.execute(f"ALTER TABLE request_history ADD COLUMN {name} {definition}")
+            self._conn.execute(
+                f"ALTER TABLE request_history ADD COLUMN {name} {definition}"
+            )
 
     def start_request(self, payload: dict[str, Any]) -> str:
         request_id = payload.get("request_id") or f"req_{uuid.uuid4().hex}"
@@ -94,13 +98,13 @@ class MetricsStore:
             if item is None:
                 return
             if reasoning_delta:
-                item["live_reasoning_chars"] = int(item.get("live_reasoning_chars") or 0) + len(
-                    reasoning_delta
-                )
+                item["live_reasoning_chars"] = int(
+                    item.get("live_reasoning_chars") or 0
+                ) + len(reasoning_delta)
             if output_delta:
-                item["live_output_chars"] = int(item.get("live_output_chars") or 0) + len(
-                    output_delta
-                )
+                item["live_output_chars"] = int(
+                    item.get("live_output_chars") or 0
+                ) + len(output_delta)
 
     def complete_request(self, request_id: str, **fields: Any) -> None:
         self._finish_request(request_id, status="completed", **fields)
@@ -201,8 +205,12 @@ class MetricsStore:
             )
             item["live_reasoning_chars"] = int(item.get("live_reasoning_chars") or 0)
             item["live_output_chars"] = int(item.get("live_output_chars") or 0)
-            item["live_reasoning_tokens_est"] = self._estimate_tokens(item["live_reasoning_chars"])
-            item["live_output_tokens_est"] = self._estimate_tokens(item["live_output_chars"])
+            item["live_reasoning_tokens_est"] = self._estimate_tokens(
+                item["live_reasoning_chars"]
+            )
+            item["live_output_tokens_est"] = self._estimate_tokens(
+                item["live_output_chars"]
+            )
         return [self._public_view(item) for item in items]
 
     def get_history(self, limit: int = 100) -> list[dict[str, Any]]:
@@ -233,7 +241,10 @@ class MetricsStore:
         ]
         avg_service_duration_ms = (
             int(
-                sum(item.get("service_duration_ms", 0) or 0 for item in completed_with_service)
+                sum(
+                    item.get("service_duration_ms", 0) or 0
+                    for item in completed_with_service
+                )
                 / len(completed_with_service)
             )
             if completed_with_service
@@ -241,7 +252,10 @@ class MetricsStore:
         )
         avg_queue_duration_ms = (
             int(
-                sum(item.get("queue_duration_ms", 0) or 0 for item in completed_with_queue)
+                sum(
+                    item.get("queue_duration_ms", 0) or 0
+                    for item in completed_with_queue
+                )
                 / len(completed_with_queue)
             )
             if completed_with_queue
@@ -250,7 +264,9 @@ class MetricsStore:
         return {
             "active_count": len(active),
             "queued_count": sum(1 for item in active if item.get("state") == "queued"),
-            "running_count": sum(1 for item in active if item.get("state") == "running"),
+            "running_count": sum(
+                1 for item in active if item.get("state") == "running"
+            ),
             "completed_count": len(completed),
             "error_count": sum(1 for item in history if item.get("status") == "error"),
             "avg_duration_ms": avg_service_duration_ms,

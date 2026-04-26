@@ -24,7 +24,9 @@ Return only valid JSON that matches the provided schema.
 Do not add markdown or commentary."""
 
 
-def build_phase1_messages(original_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_phase1_messages(
+    original_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     return [{"role": "system", "content": PHASE1_SYSTEM_PROMPT}, *original_messages]
 
 
@@ -60,7 +62,9 @@ def _sanitize_formatter_part(part: Any) -> Any:
     return sanitized or {"type": part_type or "unknown"}
 
 
-def sanitize_messages_for_formatter(original_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def sanitize_messages_for_formatter(
+    original_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     sanitized_messages: list[dict[str, Any]] = []
     for message in original_messages:
         if not isinstance(message, dict):
@@ -76,7 +80,9 @@ def sanitize_messages_for_formatter(original_messages: list[dict[str, Any]]) -> 
         if isinstance(content, str):
             sanitized_message["content"] = content
         elif isinstance(content, list):
-            sanitized_message["content"] = [_sanitize_formatter_part(part) for part in content]
+            sanitized_message["content"] = [
+                _sanitize_formatter_part(part) for part in content
+            ]
 
         sanitized_messages.append(sanitized_message)
     return sanitized_messages

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
-import statistics
 import subprocess
 import threading
 import time
@@ -63,7 +62,12 @@ def unload_all_models(lms_bin: str) -> None:
     for item in parse_lms_ps(lms_bin):
         identifier = item.get("identifier")
         if isinstance(identifier, str):
-            subprocess.run([lms_bin, "unload", identifier], check=False, capture_output=True, text=True)
+            subprocess.run(
+                [lms_bin, "unload", identifier],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
 
 def load_model(
@@ -227,7 +231,10 @@ def make_payload(model: str, max_tokens: int, request_index: int) -> bytes:
         "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": "You are a precise benchmark assistant."},
-            {"role": "user", "content": f"{PROMPT}\n\nBenchmark request {request_index}."},
+            {
+                "role": "user",
+                "content": f"{PROMPT}\n\nBenchmark request {request_index}.",
+            },
         ],
     }
     return json.dumps(body).encode("utf-8")
@@ -258,8 +265,12 @@ def execute_request(
             index=request_index,
             ok=True,
             latency_seconds=time.perf_counter() - started,
-            prompt_tokens=usage.get("prompt_tokens") if isinstance(usage, dict) else None,
-            completion_tokens=usage.get("completion_tokens") if isinstance(usage, dict) else None,
+            prompt_tokens=usage.get("prompt_tokens")
+            if isinstance(usage, dict)
+            else None,
+            completion_tokens=usage.get("completion_tokens")
+            if isinstance(usage, dict)
+            else None,
             error=None,
         )
     except urllib.error.HTTPError as exc:
@@ -350,8 +361,14 @@ def run_request_level(
 
     succeeded = [item for item in requests if item.ok]
     latencies = [item.latency_seconds for item in succeeded]
-    rss_values = [item.server_rss_bytes for item in sampler.samples if item.server_rss_bytes is not None]
-    free_percents = [item.free_percent for item in sampler.samples if item.free_percent is not None]
+    rss_values = [
+        item.server_rss_bytes
+        for item in sampler.samples
+        if item.server_rss_bytes is not None
+    ]
+    free_percents = [
+        item.free_percent for item in sampler.samples if item.free_percent is not None
+    ]
     pageouts = [item.pageouts for item in sampler.samples if item.pageouts is not None]
     swapouts = [item.swapouts for item in sampler.samples if item.swapouts is not None]
     idle_rss = sampler.samples[0].server_rss_bytes
@@ -364,7 +381,11 @@ def run_request_level(
         parallel=parallel,
         idle_rss_gb=(idle_rss / (1024**3) if idle_rss is not None else None),
         max_request_rss_gb=(max_rss / (1024**3) if max_rss is not None else None),
-        request_rss_delta_gb=((max_rss - idle_rss) / (1024**3) if max_rss is not None and idle_rss is not None else None),
+        request_rss_delta_gb=(
+            (max_rss - idle_rss) / (1024**3)
+            if max_rss is not None and idle_rss is not None
+            else None
+        ),
         min_free_percent=min(free_percents) if free_percents else None,
         delta_pageouts=(pageouts[-1] - pageouts[0] if len(pageouts) >= 2 else None),
         delta_swapouts=(swapouts[-1] - swapouts[0] if len(swapouts) >= 2 else None),
@@ -390,16 +411,36 @@ def parse_model_arg(value: str) -> tuple[str, str]:
 
 def print_summary(results: list[LevelResult]) -> None:
     print()
-    print("model       | parallel | ok/total | idle_gb | max_gb | delta_gb | min_free% | p50_s | p95_s")
+    print(
+        "model       | parallel | ok/total | idle_gb | max_gb | delta_gb | min_free% | p50_s | p95_s"
+    )
     print("-" * 96)
     for result in results:
         total = result.completed + result.failed
         idle = f"{result.idle_rss_gb:.2f}" if result.idle_rss_gb is not None else "-"
-        max_rss = f"{result.max_request_rss_gb:.2f}" if result.max_request_rss_gb is not None else "-"
-        delta = f"{result.request_rss_delta_gb:.2f}" if result.request_rss_delta_gb is not None else "-"
-        free = str(result.min_free_percent) if result.min_free_percent is not None else "-"
-        p50 = f"{result.latency_p50_seconds:.1f}" if result.latency_p50_seconds is not None else "-"
-        p95 = f"{result.latency_p95_seconds:.1f}" if result.latency_p95_seconds is not None else "-"
+        max_rss = (
+            f"{result.max_request_rss_gb:.2f}"
+            if result.max_request_rss_gb is not None
+            else "-"
+        )
+        delta = (
+            f"{result.request_rss_delta_gb:.2f}"
+            if result.request_rss_delta_gb is not None
+            else "-"
+        )
+        free = (
+            str(result.min_free_percent) if result.min_free_percent is not None else "-"
+        )
+        p50 = (
+            f"{result.latency_p50_seconds:.1f}"
+            if result.latency_p50_seconds is not None
+            else "-"
+        )
+        p95 = (
+            f"{result.latency_p95_seconds:.1f}"
+            if result.latency_p95_seconds is not None
+            else "-"
+        )
         print(
             f"{result.model_alias:<11} | "
             f"{result.parallel:>8} | "
@@ -414,8 +455,12 @@ def print_summary(results: list[LevelResult]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark LM Studio memory usage for configured models")
-    parser.add_argument("--lms-bin", default=str(Path.home() / ".lmstudio" / "bin" / "lms"))
+    parser = argparse.ArgumentParser(
+        description="Benchmark LM Studio memory usage for configured models"
+    )
+    parser.add_argument(
+        "--lms-bin", default=str(Path.home() / ".lmstudio" / "bin" / "lms")
+    )
     parser.add_argument("--backend-port", type=int, default=8097)
     parser.add_argument("--model", action="append", type=parse_model_arg)
     parser.add_argument("--context-length", type=int, default=8192)
@@ -437,7 +482,17 @@ def main() -> None:
     )
     output_json.parent.mkdir(parents=True, exist_ok=True)
 
-    run_optional([args.lms_bin, "server", "start", "-p", str(args.backend_port), "--bind", "127.0.0.1"])
+    run_optional(
+        [
+            args.lms_bin,
+            "server",
+            "start",
+            "-p",
+            str(args.backend_port),
+            "--bind",
+            "127.0.0.1",
+        ]
+    )
     wait_for_http(f"http://127.0.0.1:{args.backend_port}/v1/models", timeout_seconds=60)
 
     results: list[LevelResult] = []

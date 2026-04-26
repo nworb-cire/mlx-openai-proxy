@@ -49,7 +49,9 @@ class ModelRuntimeManager:
         alias = self._aliases_by_input.get(value.lower())
         if alias is None:
             supported = ", ".join(sorted(self._specs))
-            raise ValueError(f"unsupported model '{value}'; supported models: {supported}")
+            raise ValueError(
+                f"unsupported model '{value}'; supported models: {supported}"
+            )
         return alias
 
     def advertised_models(self) -> dict[str, Any]:
@@ -102,7 +104,9 @@ class ModelRuntimeManager:
             self._active_alias = alias
             return
 
-        previous_alias = next((item for item in loaded_aliases if item in self._specs), None)
+        previous_alias = next(
+            (item for item in loaded_aliases if item in self._specs), None
+        )
         for loaded_alias in loaded_aliases:
             await self._run_lms("unload", loaded_alias)
 
@@ -142,7 +146,9 @@ class ModelRuntimeManager:
         try:
             items = json.loads(output or "[]")
         except json.JSONDecodeError as exc:
-            raise ModelRuntimeError(f"failed to parse 'lms ps --json': {output}") from exc
+            raise ModelRuntimeError(
+                f"failed to parse 'lms ps --json': {output}"
+            ) from exc
         loaded: list[str] = []
         for item in items:
             if not isinstance(item, dict):

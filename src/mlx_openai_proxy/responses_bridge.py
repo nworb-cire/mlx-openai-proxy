@@ -29,7 +29,12 @@ def responses_input_to_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
                         parts.append({"type": "text", "text": part.get("text", "")})
                     elif part.get("type") in {"input_image", "image_url"}:
                         if "image_url" in part:
-                            parts.append({"type": "image_url", "image_url": {"url": part["image_url"]}})
+                            parts.append(
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": part["image_url"]},
+                                }
+                            )
                 messages.append({"role": role, "content": parts})
         if messages:
             return messages
@@ -80,7 +85,9 @@ def chat_response_to_responses(chat_response: dict[str, Any]) -> dict[str, Any]:
             "type": "message",
             "role": "assistant",
             "status": "completed",
-            "content": [{"type": "output_text", "text": output_text, "annotations": []}],
+            "content": [
+                {"type": "output_text", "text": output_text, "annotations": []}
+            ],
         }
     )
 

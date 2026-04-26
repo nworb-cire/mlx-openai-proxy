@@ -18,21 +18,31 @@ class TruncatingBackend:
             "object": "chat.completion.chunk",
             "created": 1,
             "model": body.get("model"),
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
         }
         yield {
             "id": "chatcmpl-test",
             "object": "chat.completion.chunk",
             "created": 1,
             "model": body.get("model"),
-            "choices": [{"index": 0, "delta": {"reasoning_content": "thinking"}, "finish_reason": None}],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"reasoning_content": "thinking"},
+                    "finish_reason": None,
+                }
+            ],
         }
         yield {
             "id": "chatcmpl-test",
             "object": "chat.completion.chunk",
             "created": 1,
             "model": body.get("model"),
-            "choices": [{"index": 0, "delta": {"content": "answer"}, "finish_reason": None}],
+            "choices": [
+                {"index": 0, "delta": {"content": "answer"}, "finish_reason": None}
+            ],
         }
         raise httpx.RemoteProtocolError("incomplete chunked read")
 
@@ -40,7 +50,9 @@ class TruncatingBackend:
 @pytest.mark.asyncio
 async def test_buffered_chat_completion_recovers_from_partial_stream(tmp_path) -> None:
     settings = Settings(metrics_db_path=str(tmp_path / "metrics.db"))
-    service = ProxyService(settings, TruncatingBackend(), MetricsStore(settings.metrics_db_path))
+    service = ProxyService(
+        settings, TruncatingBackend(), MetricsStore(settings.metrics_db_path)
+    )
 
     response = await service._buffered_chat_completion(
         {

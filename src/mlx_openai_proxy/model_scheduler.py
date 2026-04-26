@@ -34,7 +34,11 @@ class ModelScheduler:
                 await switch_task
                 continue
             async with self._lock:
-                if self._switch_task is None and not self._queue and self._active_count == 0:
+                if (
+                    self._switch_task is None
+                    and not self._queue
+                    and self._active_count == 0
+                ):
                     return
             await asyncio.sleep(0)
 
@@ -42,7 +46,9 @@ class ModelScheduler:
     async def slot(self, request_id: str, model: str) -> AsyncIterator[str]:
         normalized_model = self.runtime.normalize_alias(model)
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        pending = PendingRequest(request_id=request_id, model=normalized_model, future=future)
+        pending = PendingRequest(
+            request_id=request_id, model=normalized_model, future=future
+        )
         async with self._lock:
             self._queue.append(pending)
             self._pump_locked()
@@ -62,7 +68,9 @@ class ModelScheduler:
                 self._pump_locked()
 
     def _remove_queued_request_locked(self, request_id: str) -> None:
-        self._queue = deque(item for item in self._queue if item.request_id != request_id)
+        self._queue = deque(
+            item for item in self._queue if item.request_id != request_id
+        )
 
     def _pump_locked(self) -> None:
         if self._switch_task is not None:

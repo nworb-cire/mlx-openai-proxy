@@ -39,7 +39,9 @@ def test_metrics_store_tracks_active_and_history(tmp_path: Path) -> None:
     assert history[0]["model"] == "gemma4:26b"
 
 
-def test_metrics_store_derives_queue_and_service_from_service_start(tmp_path: Path) -> None:
+def test_metrics_store_derives_queue_and_service_from_service_start(
+    tmp_path: Path,
+) -> None:
     store = MetricsStore(str(tmp_path / "metrics.db"))
     request_id = store.start_request(
         {

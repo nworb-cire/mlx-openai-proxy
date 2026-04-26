@@ -57,7 +57,10 @@ class CaptureBackend:
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": "A gray cat sitting on a chair."},
+                        "message": {
+                            "role": "assistant",
+                            "content": "A gray cat sitting on a chair.",
+                        },
                         "logprobs": None,
                         "finish_reason": "stop",
                     }
@@ -72,7 +75,10 @@ class CaptureBackend:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": '{"caption":"A gray cat"}'},
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"caption":"A gray cat"}',
+                    },
                     "logprobs": None,
                     "finish_reason": "stop",
                 }
@@ -82,7 +88,9 @@ class CaptureBackend:
 
 
 @pytest.mark.asyncio
-async def test_structured_flow_does_not_forward_data_url_to_formatter(tmp_path: Path) -> None:
+async def test_structured_flow_does_not_forward_data_url_to_formatter(
+    tmp_path: Path,
+) -> None:
     backend = CaptureBackend()
     settings = Settings(metrics_db_path=str(tmp_path / "metrics.db"))
     metrics = MetricsStore(settings.metrics_db_path)

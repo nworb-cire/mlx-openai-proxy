@@ -18,14 +18,18 @@ class FailingStreamBackend:
             "object": "chat.completion.chunk",
             "created": 1,
             "model": body.get("model"),
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
         }
         yield {
             "id": "chatcmpl-test",
             "object": "chat.completion.chunk",
             "created": 1,
             "model": body.get("model"),
-            "choices": [{"index": 0, "delta": {"content": "partial"}, "finish_reason": None}],
+            "choices": [
+                {"index": 0, "delta": {"content": "partial"}, "finish_reason": None}
+            ],
         }
         raise RuntimeError("stream failed")
 

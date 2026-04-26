@@ -31,7 +31,10 @@ def _body_text(messages: list[dict[str, Any]]) -> str:
             parts.append(content)
         elif isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") in {"text", "input_text"}:
+                if isinstance(part, dict) and part.get("type") in {
+                    "text",
+                    "input_text",
+                }:
                     text = part.get("text")
                     if isinstance(text, str):
                         parts.append(text)
@@ -44,18 +47,25 @@ def _has_images(messages: list[dict[str, Any]]) -> bool:
         if not isinstance(content, list):
             continue
         for part in content:
-            if isinstance(part, dict) and part.get("type") in {"image_url", "input_image"}:
+            if isinstance(part, dict) and part.get("type") in {
+                "image_url",
+                "input_image",
+            }:
                 return True
     return False
 
 
-def classify_chat_request(body: dict[str, Any], mode: StructuredMode) -> RequestClassification:
+def classify_chat_request(
+    body: dict[str, Any], mode: StructuredMode
+) -> RequestClassification:
     messages = body.get("messages")
     messages = messages if isinstance(messages, list) else []
     text = _body_text(messages)
     has_schema = extract_json_schema(body) is not None
     has_images = _has_images(messages)
-    asks_for_reasoning = bool(body.get("reasoning")) or "reason" in text or "think" in text
+    asks_for_reasoning = (
+        bool(body.get("reasoning")) or "reason" in text or "think" in text
+    )
 
     if not has_schema:
         return RequestClassification(
@@ -84,8 +94,13 @@ def classify_chat_request(body: dict[str, Any], mode: StructuredMode) -> Request
             reason="forced_two_phase",
         )
 
-    extraction_like = any(token in text for token in ("extract", "classify", "label", "sentiment"))
-    reasoning_heavy = any(token in text for token in ("why", "because", "explain", "analyze", "compute", "math"))
+    extraction_like = any(
+        token in text for token in ("extract", "classify", "label", "sentiment")
+    )
+    reasoning_heavy = any(
+        token in text
+        for token in ("why", "because", "explain", "analyze", "compute", "math")
+    )
 
     if extraction_like and not reasoning_heavy and not has_images and len(text) < 600:
         return RequestClassification(
