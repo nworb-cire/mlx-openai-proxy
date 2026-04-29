@@ -62,7 +62,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary = metrics.get_summary()
         try:
             summary["active_model"] = runtime.current_active_alias()
-            summary["loaded_models"] = await runtime.current_loaded_aliases()
+            if summary["active_count"]:
+                summary["loaded_models"] = (
+                    [summary["active_model"]] if summary["active_model"] else []
+                )
+            else:
+                summary["loaded_models"] = await runtime.current_loaded_aliases()
             summary["loaded_model"] = summary["active_model"]
         except Exception:
             summary["active_model"] = None
