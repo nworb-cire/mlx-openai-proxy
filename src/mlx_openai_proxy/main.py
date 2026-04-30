@@ -4,9 +4,10 @@ import argparse
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
+from .asr import AsrRuntime, ParakeetAsrRuntime, ResidentAsrService
 from .backend import BackendClient, BackendError
 from .config import Settings
 from .dashboard import dashboard_html
@@ -17,7 +18,9 @@ from .model_scheduler import ModelScheduler
 from .service import ActiveRequestTimeoutError, ProxyService
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, asr_runtime: AsrRuntime | None = None
+) -> FastAPI:
     settings = settings or Settings()
     configure_logging(settings.log_level)
 
@@ -29,13 +32,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     runtime = ModelRuntimeManager(settings)
     scheduler = ModelScheduler(runtime, settings.default_model_alias)
     service = ProxyService(settings, backend, metrics, scheduler=scheduler)
+    asr = ResidentAsrService(
+        settings.asr,
+        asr_runtime or ParakeetAsrRuntime(settings.asr),
+        metrics,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
             await runtime.normalize_residency()
+            await asr.load()
             yield
         finally:
+            await asr.close()
             await backend.close()
 
     app = FastAPI(title="MLX OpenAI Proxy", lifespan=lifespan)
@@ -44,14 +54,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.metrics = metrics
     app.state.runtime = runtime
     app.state.scheduler = scheduler
+    app.state.asr = asr
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
-        return await service.health()
+        health = await service.health()
+        health["asr"] = asr.health()
+        return health
 
     @app.get("/v1/models")
     async def models() -> dict[str, object]:
-        return await service.models()
+        payload = await service.models()
+        data = list(payload.get("data", []))
+        data.append(asr.advertised_model())
+        return {"object": "list", "data": data}
 
     @app.get("/admin/dashboard", response_class=HTMLResponse)
     async def admin_dashboard() -> str:
@@ -69,10 +85,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else:
                 summary["loaded_models"] = await runtime.current_loaded_aliases()
             summary["loaded_model"] = summary["active_model"]
+            summary["asr"] = asr.health()
         except Exception:
             summary["active_model"] = None
             summary["loaded_models"] = []
             summary["loaded_model"] = None
+            summary["asr"] = {"loaded": False, "model": settings.asr.alias}
         return summary
 
     @app.get("/admin/api/active")
@@ -106,6 +124,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/audio/transcriptions")
+    async def audio_transcriptions(
+        file: UploadFile = File(...),
+        model: str | None = Form(default=None),
+        language: str | None = Form(default=None),
+        prompt: str | None = Form(default=None),
+        response_format: str | None = Form(default=None),
+    ):
+        del language, prompt
+        try:
+            result = await asr.transcribe_upload(
+                upload=file,
+                model=model,
+                response_format=response_format,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if isinstance(result, str):
+            return PlainTextResponse(result)
+        return result
+
+    @app.websocket("/v1/realtime")
+    async def realtime(websocket: WebSocket):
+        model = websocket.query_params.get("model")
+        if model and model not in {settings.asr.alias, settings.asr.model_id}:
+            await websocket.accept()
+            await websocket.send_json(
+                {"type": "error", "error": {"message": f"unsupported ASR model '{model}'"}}
+            )
+            await websocket.close(code=1008)
+            return
+        await asr.realtime(websocket)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:

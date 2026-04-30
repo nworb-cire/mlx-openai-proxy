@@ -5,8 +5,26 @@ from fastapi.testclient import TestClient
 from mlx_openai_proxy.main import create_app
 
 
+class FakeAsrRuntime:
+    @property
+    def alias(self) -> str:
+        return "parakeet:tdt-0.6b-v3"
+
+    async def load(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def transcribe_pcm(self, pcm: bytes, sample_rate: int):
+        raise AssertionError("not used")
+
+    def create_stream(self):
+        raise AssertionError("not used")
+
+
 def test_admin_summary_includes_loaded_model() -> None:
-    app = create_app()
+    app = create_app(asr_runtime=FakeAsrRuntime())
 
     def fake_current_active_alias() -> str:
         return "gemma4:26b"
@@ -31,7 +49,7 @@ def test_admin_summary_includes_loaded_model() -> None:
 
 
 def test_admin_summary_does_not_probe_loaded_models_during_active_request() -> None:
-    app = create_app()
+    app = create_app(asr_runtime=FakeAsrRuntime())
 
     def fake_current_active_alias() -> str:
         return "gemma4:e2b"

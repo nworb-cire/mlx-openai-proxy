@@ -78,6 +78,9 @@ Runtime settings are read from environment variables with the `MLX_PROXY_` prefi
 | `MLX_PROXY_ACTIVE_REQUEST_TIMEOUT_SECONDS` | `600` | Maximum active request runtime before the proxy returns a timeout. |
 | `MLX_PROXY_LOG_LEVEL` | `INFO` | Python logging level. |
 
+ASR settings live in `config/asr.json`. The proxy loads the configured Parakeet
+model at startup and exposes it alongside the chat models.
+
 ## What It Is Used For
 
 Use this project when you want to:
@@ -97,6 +100,26 @@ The served model set is configured as a JSON list. Each entry controls the LM St
 To add or remove a served model, edit `config/models.json` and restart the proxy.
 
 You can also point the proxy at another model config file with `MLX_PROXY_MODEL_CONFIG_PATH`.
+
+## Audio Transcription
+
+The proxy also exposes local Parakeet transcription through the OpenAI-compatible
+audio and Realtime surfaces. The ASR model is resident and independent from LM
+Studio, so switching between generative LLMs does not unload it.
+
+Batch transcription:
+
+```sh
+curl http://127.0.0.1:8080/v1/audio/transcriptions \
+  -F model=parakeet:tdt-0.6b-v3 \
+  -F file=@speech.wav
+```
+
+Realtime transcription is available at `/v1/realtime` over WebSocket. Clients
+stream base64 mono PCM16 audio chunks using `input_audio_buffer.append`. Server
+VAD is enabled by default and emits a completed transcription event after
+trailing silence; clients can send `session.update` with `turn_detection: null`
+to use manual `input_audio_buffer.commit` instead.
 
 ## In Practice
 

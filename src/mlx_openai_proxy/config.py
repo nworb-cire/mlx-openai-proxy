@@ -28,6 +28,21 @@ class ConfiguredModel(BaseModel):
     parallel: int = Field(default=1)
 
 
+class AsrVadConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    threshold: int = Field(default=500)
+    silence_duration_ms: int = Field(default=700)
+    prefix_padding_ms: int = Field(default=300)
+
+
+class ConfiguredAsr(BaseModel):
+    alias: str = Field(default="parakeet:tdt-0.6b-v3")
+    model_id: str = Field(default="mlx-community/parakeet-tdt-0.6b-v3")
+    max_concurrency: int = Field(default=1)
+    input_sample_rate: int = Field(default=24000)
+    vad: AsrVadConfig = Field(default_factory=AsrVadConfig)
+
+
 def _default_metrics_db_path() -> str:
     return str(Path.home() / ".local" / "share" / "mlx-openai-proxy" / "metrics.db")
 
@@ -40,8 +55,16 @@ def _default_model_config_path() -> str:
     return str(Path(__file__).resolve().parents[2] / "config" / "models.json")
 
 
+def _default_asr_config_path() -> str:
+    return str(Path(__file__).resolve().parents[2] / "config" / "asr.json")
+
+
 def _default_models() -> list[ConfiguredModel]:
     return _load_models_from_path(Path(_default_model_config_path()))
+
+
+def _default_asr() -> ConfiguredAsr:
+    return _load_asr_from_path(Path(_default_asr_config_path()))
 
 
 def _load_models_from_path(path: Path) -> list[ConfiguredModel]:
@@ -66,6 +89,15 @@ def _load_models_from_path(path: Path) -> list[ConfiguredModel]:
     return [ConfiguredModel.model_validate(item) for item in data]
 
 
+def _load_asr_from_path(path: Path) -> ConfiguredAsr:
+    if not path.exists():
+        return ConfiguredAsr()
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError(f"asr config must be a JSON object: {path}")
+    return ConfiguredAsr.model_validate(data)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MLX_PROXY_",
@@ -85,6 +117,7 @@ class Settings(BaseSettings):
 
     model_config_path: str = Field(default_factory=_default_model_config_path)
     models: list[ConfiguredModel] = Field(default_factory=_default_models)
+    asr: ConfiguredAsr = Field(default_factory=_default_asr)
 
     reasoning_visibility: ReasoningVisibility = Field(
         default=ReasoningVisibility.COMPATIBLE

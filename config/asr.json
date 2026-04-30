@@ -1,0 +1,12 @@
+{
+  "alias": "parakeet:tdt-0.6b-v3",
+  "model_id": "mlx-community/parakeet-tdt-0.6b-v3",
+  "max_concurrency": 1,
+  "input_sample_rate": 24000,
+  "vad": {
+    "enabled": true,
+    "threshold": 500,
+    "silence_duration_ms": 700,
+    "prefix_padding_ms": 300
+  }
+}
