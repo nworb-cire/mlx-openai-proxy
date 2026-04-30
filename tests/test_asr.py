@@ -3,11 +3,14 @@ from __future__ import annotations
 import base64
 import io
 import json
+import subprocess
 import wave
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import mlx_openai_proxy.asr as asr_module
+from mlx_openai_proxy.asr import decode_audio_bytes
 from mlx_openai_proxy.asr import Transcript
 from mlx_openai_proxy.config import ConfiguredAsr, Settings
 from mlx_openai_proxy.main import create_app
@@ -138,6 +141,34 @@ def test_audio_transcriptions_text_format(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.text == "hello world"
+
+
+def test_decode_audio_uses_ffmpeg_for_browser_formats(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        assert name == "ffmpeg"
+        return "/usr/local/bin/ffmpeg"
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=b"\x01\x00\x02\x00",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(asr_module, "which", fake_which)
+    monkeypatch.setattr(asr_module.subprocess, "run", fake_run)
+
+    pcm, sample_rate = decode_audio_bytes(b"webm-content", "audio.webm")
+
+    assert pcm == b"\x01\x00\x02\x00"
+    assert sample_rate == 24000
+    assert calls
+    assert "-ar" in calls[0]
+    assert "24000" in calls[0]
 
 
 def test_realtime_server_vad_auto_commits(tmp_path: Path) -> None:

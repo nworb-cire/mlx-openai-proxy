@@ -4,12 +4,14 @@ import asyncio
 import audioop
 import base64
 import io
+import subprocess
 import tempfile
 import time
 import wave
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import which
 from typing import Any, Protocol
 
 from fastapi import UploadFile, WebSocket, WebSocketDisconnect
@@ -428,20 +430,55 @@ def decode_audio_bytes(content: bytes, filename: str) -> tuple[bytes, int]:
                 width = handle.getsampwidth()
                 sample_rate = handle.getframerate()
                 frames = handle.readframes(handle.getnframes())
-        except wave.Error as exc:
+        except wave.Error:
             if suffix == "":
                 return content, 24000
-            raise ValueError("only WAV or raw PCM16 audio is supported") from exc
+            return decode_with_ffmpeg(content, suffix)
         if width != 2:
             raise ValueError("only 16-bit PCM WAV audio is supported")
         if channels > 1:
             frames = audioop.tomono(frames, width, 0.5, 0.5)
         return frames, sample_rate
 
-    with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
+    return decode_with_ffmpeg(content, suffix)
+
+
+def decode_with_ffmpeg(content: bytes, suffix: str) -> tuple[bytes, int]:
+    ffmpeg = which("ffmpeg")
+    if ffmpeg is None:
+        raise ValueError(
+            "audio format requires ffmpeg; install ffmpeg or upload WAV/PCM16 audio"
+        )
+    target_rate = 24000
+    with tempfile.NamedTemporaryFile(suffix=suffix or ".audio") as handle:
         handle.write(content)
         handle.flush()
-        raise ValueError("only WAV or raw PCM16 audio is supported")
+        process = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                handle.name,
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ac",
+                "1",
+                "-ar",
+                str(target_rate),
+                "pipe:1",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"failed to decode audio with ffmpeg: {detail}")
+    return process.stdout, target_rate
 
 
 def resample_pcm16(pcm: bytes, source_rate: int, target_rate: int) -> bytes:
