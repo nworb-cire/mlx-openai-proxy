@@ -499,6 +499,8 @@ def encode_wav_bytes(pcm: bytes, sample_rate: int) -> bytes:
 
 
 def pcm16_to_float32(pcm: bytes) -> Any:
+    import mlx.core as mx
     import numpy as np
 
-    return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    return mx.array(audio)

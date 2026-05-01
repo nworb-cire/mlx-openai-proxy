@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import mlx_openai_proxy.asr as asr_module
 from mlx_openai_proxy.asr import decode_audio_bytes
+from mlx_openai_proxy.asr import ParakeetStreamingTranscriber
 from mlx_openai_proxy.asr import Transcript
 from mlx_openai_proxy.config import ConfiguredAsr, Settings
 from mlx_openai_proxy.main import create_app
@@ -50,6 +51,53 @@ class FakeAsrRuntime:
 
     def create_stream(self) -> FakeStream:
         return self.stream
+
+
+class FakeParakeetResult:
+    text = "draft"
+
+
+class FakeParakeetStream:
+    def __init__(self) -> None:
+        import mlx.core as mx
+
+        self.audio_buffer = mx.array([])
+        self.result = FakeParakeetResult()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return None
+
+    def add_audio(self, audio) -> None:
+        import mlx.core as mx
+
+        self.audio_buffer = mx.concat([self.audio_buffer, audio], axis=0)
+
+
+class FakePreprocessorConfig:
+    sample_rate = 24000
+
+
+class FakeParakeetModel:
+    preprocessor_config = FakePreprocessorConfig()
+
+    def __init__(self) -> None:
+        self.stream = FakeParakeetStream()
+
+    def transcribe_stream(self, context_size):
+        assert context_size == (256, 256)
+        return self.stream
+
+
+class FakeParakeetAsrRuntime(FakeAsrRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = FakeParakeetModel()
+
+    def create_stream(self) -> ParakeetStreamingTranscriber:
+        return ParakeetStreamingTranscriber(self.model, sample_rate=24000)
 
 
 def build_settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -203,6 +251,42 @@ def test_realtime_server_vad_auto_commits(tmp_path: Path) -> None:
         "type": "conversation.item.input_audio_transcription.completed",
         "transcript": "hello world",
     }
+
+
+def test_realtime_server_vad_streams_mlx_audio_to_parakeet(tmp_path: Path) -> None:
+    runtime = FakeParakeetAsrRuntime()
+    app = create_app(build_settings(tmp_path), asr_runtime=runtime)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/v1/realtime?model=parakeet:tdt-0.6b-v3"
+        ) as websocket:
+            assert websocket.receive_json()["type"] == "session.created"
+            websocket.send_json(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(tone_bytes()).decode("ascii"),
+                }
+            )
+            events = [websocket.receive_json(), websocket.receive_json()]
+            websocket.send_json(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(silence_bytes()).decode("ascii"),
+                }
+            )
+            events.extend(websocket.receive_json() for _ in range(3))
+
+    assert [event["type"] for event in events] == [
+        "input_audio_buffer.speech_started",
+        "conversation.item.input_audio_transcription.delta",
+        "input_audio_buffer.speech_stopped",
+        "input_audio_buffer.committed",
+        "conversation.item.input_audio_transcription.completed",
+    ]
+    assert runtime.model.stream.audio_buffer.shape[0] == (
+        len(tone_bytes()) + len(silence_bytes())
+    ) // 2
 
 
 def test_realtime_manual_commit(tmp_path: Path) -> None:
