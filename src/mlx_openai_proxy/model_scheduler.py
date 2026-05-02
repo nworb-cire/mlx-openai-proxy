@@ -5,15 +5,27 @@ from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Callable
 
 from .model_runtime import ModelRuntimeManager
+from .request_priority import RequestPriority
 
 
 @dataclass
 class PendingRequest:
     request_id: str
     model: str
+    priority: RequestPriority
     future: asyncio.Future[None]
+    sequence: int
+    on_preempt: Callable[[], None] | None
+
+
+@dataclass
+class RunningRequest:
+    request_id: str
+    priority: RequestPriority
+    on_preempt: Callable[[], None] | None
 
 
 class ModelScheduler:
@@ -23,9 +35,11 @@ class ModelScheduler:
         self._active_model = default_alias
         self._active_count = 0
         self._running_request_ids: set[str] = set()
+        self._running_requests: dict[str, RunningRequest] = {}
         self._queue: deque[PendingRequest] = deque()
         self._lock = asyncio.Lock()
         self._switch_task: asyncio.Task[None] | None = None
+        self._next_sequence = 0
 
     async def wait_for_idle(self) -> None:
         while True:
@@ -43,11 +57,25 @@ class ModelScheduler:
             await asyncio.sleep(0)
 
     @asynccontextmanager
-    async def slot(self, request_id: str, model: str) -> AsyncIterator[str]:
+    async def slot(
+        self,
+        request_id: str,
+        model: str,
+        *,
+        priority: RequestPriority = RequestPriority.DEFAULT,
+        on_preempt: Callable[[], None] | None = None,
+    ) -> AsyncIterator[str]:
         normalized_model = self.runtime.normalize_alias(model)
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        sequence = self._next_sequence
+        self._next_sequence += 1
         pending = PendingRequest(
-            request_id=request_id, model=normalized_model, future=future
+            request_id=request_id,
+            model=normalized_model,
+            priority=priority,
+            future=future,
+            sequence=sequence,
+            on_preempt=on_preempt,
         )
         async with self._lock:
             self._queue.append(pending)
@@ -64,6 +92,7 @@ class ModelScheduler:
         finally:
             async with self._lock:
                 self._running_request_ids.discard(request_id)
+                self._running_requests.pop(request_id, None)
                 self._active_count = max(0, self._active_count - 1)
                 self._pump_locked()
 
@@ -77,13 +106,14 @@ class ModelScheduler:
             return
 
         if self._active_count > 0:
+            self._preempt_for_critical_locked()
             self._admit_head_requests_locked()
             return
 
         if not self._queue:
             return
 
-        head_model = self._queue[0].model
+        head_model = self._next_pending_request_locked().model
         if self._active_model != head_model:
             self._start_switch_locked(head_model)
             return
@@ -92,16 +122,65 @@ class ModelScheduler:
 
     def _admit_head_requests_locked(self) -> None:
         limit = self.runtime.concurrency_for(self._active_model)
-        while (
-            self._active_count < limit
-            and self._queue
-            and self._queue[0].model == self._active_model
-        ):
-            pending = self._queue.popleft()
+        while self._active_count < limit:
+            pending = self._pop_next_pending_for_model_locked(self._active_model)
+            if pending is None:
+                break
             self._active_count += 1
             self._running_request_ids.add(pending.request_id)
+            self._running_requests[pending.request_id] = RunningRequest(
+                request_id=pending.request_id,
+                priority=pending.priority,
+                on_preempt=pending.on_preempt,
+            )
             if not pending.future.done():
                 pending.future.set_result(None)
+
+    def _next_pending_request_locked(self) -> PendingRequest:
+        return max(self._queue, key=lambda item: (item.priority, -item.sequence))
+
+    def _pop_next_pending_for_model_locked(self, model: str) -> PendingRequest | None:
+        best_index: int | None = None
+        best_item: PendingRequest | None = None
+        for index, item in enumerate(self._queue):
+            if item.model != model:
+                continue
+            if best_item is None or (item.priority, -item.sequence) > (
+                best_item.priority,
+                -best_item.sequence,
+            ):
+                best_index = index
+                best_item = item
+        if best_index is None:
+            return None
+        del self._queue[best_index]
+        return best_item
+
+    def _preempt_for_critical_locked(self) -> None:
+        critical_items = [
+            item for item in self._queue if item.priority == RequestPriority.CRITICAL
+        ]
+        if not critical_items:
+            return
+        limit = self.runtime.concurrency_for(self._active_model)
+        needs_model_switch = any(
+            item.model != self._active_model for item in critical_items
+        )
+        needs_capacity = (
+            any(item.model == self._active_model for item in critical_items)
+            and self._active_count >= limit
+        )
+        if not needs_model_switch and not needs_capacity:
+            return
+        preempted = 0
+        for running in list(self._running_requests.values()):
+            if running.priority >= RequestPriority.CRITICAL:
+                continue
+            if running.on_preempt is not None:
+                running.on_preempt()
+                preempted += 1
+            if not needs_model_switch and preempted > 0:
+                return
 
     def _start_switch_locked(self, target_model: str) -> None:
         self._switch_task = asyncio.create_task(self._run_switch(target_model))
@@ -117,8 +196,13 @@ class ModelScheduler:
             if error is None:
                 self._active_model = target_model
             else:
-                while self._queue and self._queue[0].model == target_model:
-                    pending = self._queue.popleft()
+                failed = [
+                    item for item in self._queue if item.model == target_model
+                ]
+                self._queue = deque(
+                    item for item in self._queue if item.model != target_model
+                )
+                for pending in failed:
                     if not pending.future.done():
                         pending.future.set_exception(error)
             self._pump_locked()

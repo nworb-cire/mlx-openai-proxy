@@ -148,6 +148,29 @@ async def test_chat_nonstream_reuses_cached_response(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_priority_metadata_does_not_affect_cache_or_backend_body(
+    tmp_path: Path,
+) -> None:
+    backend = CountingStreamBackend()
+    settings = Settings(metrics_db_path=str(tmp_path / "metrics.db"))
+    service = ProxyService(settings, backend, MetricsStore(settings.metrics_db_path))
+    body = {
+        "model": settings.default_model_alias,
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"priority": "low", "job": "indexing"},
+    }
+    changed_priority = copy.deepcopy(body)
+    changed_priority["metadata"]["priority"] = "highest"
+
+    first = await service.chat(copy.deepcopy(body))
+    second = await service.chat(copy.deepcopy(changed_priority))
+
+    assert backend.calls == 1
+    assert first == second
+    assert backend.stream_bodies[0]["metadata"] == {"job": "indexing"}
+
+
+@pytest.mark.asyncio
 async def test_chat_cache_misses_when_image_changes(tmp_path: Path) -> None:
     backend = CountingStreamBackend()
     settings = Settings(metrics_db_path=str(tmp_path / "metrics.db"))

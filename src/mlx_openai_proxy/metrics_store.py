@@ -33,6 +33,7 @@ class MetricsStore:
                     classification_reason TEXT,
                     status TEXT NOT NULL,
                     error_message TEXT,
+                    priority TEXT,
                     started_at REAL NOT NULL,
                     completed_at REAL,
                     duration_ms INTEGER,
@@ -55,6 +56,7 @@ class MetricsStore:
                 )
                 """
             )
+            self._ensure_column("priority", "TEXT")
             self._ensure_column("queue_duration_ms", "INTEGER")
             self._ensure_column("service_duration_ms", "INTEGER")
             self._conn.commit()
@@ -144,13 +146,13 @@ class MetricsStore:
                 """
                 INSERT OR REPLACE INTO request_history (
                     request_id, path, model, stream, execution_path, classification_reason,
-                    status, error_message, started_at, completed_at, duration_ms,
+                    status, error_message, priority, started_at, completed_at, duration_ms,
                     queue_duration_ms, service_duration_ms,
                     has_schema, has_images, asks_for_reasoning, input_messages, input_chars,
                     input_image_count, prompt_tokens, completion_tokens, reasoning_tokens,
                     output_chars, reasoning_chars, phase1_latency_ms, phase2_latency_ms,
                     metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("request_id"),
@@ -161,6 +163,7 @@ class MetricsStore:
                     record.get("classification_reason"),
                     record.get("status"),
                     record.get("error_message"),
+                    record.get("priority"),
                     record.get("started_at"),
                     record.get("completed_at"),
                     record.get("duration_ms"),

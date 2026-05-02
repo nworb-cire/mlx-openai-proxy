@@ -27,6 +27,11 @@ from .prompting import (
     build_repair_messages,
 )
 from .request_cache import RequestCache, RequestCacheEntry
+from .request_priority import (
+    RequestPriority,
+    parse_request_priority,
+    strip_local_priority_metadata,
+)
 from .responses_bridge import chat_response_to_responses, responses_request_to_chat
 from .schema_utils import (
     chunk_text,
@@ -126,6 +131,10 @@ class ActiveRequestTimeoutError(RuntimeError):
     pass
 
 
+class RequestPreemptedError(RuntimeError):
+    pass
+
+
 class ProxyService:
     def __init__(
         self,
@@ -144,6 +153,7 @@ class ProxyService:
             max(1, settings.max_upstream_concurrency)
         )
         self._request_cache = RequestCache(ttl_seconds=REQUEST_CACHE_TTL_SECONDS)
+        self._request_priorities: dict[str, RequestPriority] = {}
 
     async def health(self) -> dict[str, Any]:
         return {"ok": True, "backend_base_url": self.settings.backend_base_url}
@@ -180,6 +190,7 @@ class ProxyService:
             )
         response = copy.deepcopy(cached.payload)
         self._complete_chat_metrics(request_id, response)
+        self._request_priorities.pop(request_id, None)
         return response
 
     def _cached_responses_response(
@@ -212,6 +223,7 @@ class ProxyService:
             output_chars=len(response.get("output_text", "") or ""),
             reasoning_chars=0,
         )
+        self._request_priorities.pop(request_id, None)
         return response
 
     async def _cache_stream(
@@ -231,9 +243,12 @@ class ProxyService:
         for chunk in chunks:
             yield chunk
         self.metrics.complete_request(request_id)
+        self._request_priorities.pop(request_id, None)
 
     async def chat(self, body: dict[str, Any]) -> dict[str, Any] | StreamingResponse:
         self._validate_chat_body(body)
+        priority = parse_request_priority(body)
+        body = strip_local_priority_metadata(body)
         body = normalize_chat_images(body, self.settings.max_inline_image_bytes)
         body = self._prepare_reasoning_request(body)
         classification = classify_chat_request(body, self.settings.schema_mode)
@@ -245,8 +260,10 @@ class ProxyService:
                 path="/v1/chat/completions",
                 body=body,
                 classification=classification,
+                priority=priority,
             )
         )
+        self._request_priorities[request_id] = priority
         log_event(
             self.logger,
             "request_classified",
@@ -332,11 +349,14 @@ class ProxyService:
             return response
         except Exception as exc:
             self.metrics.fail_request(request_id, error_message=str(exc))
+            self._request_priorities.pop(request_id, None)
             raise
 
     async def responses(
         self, body: dict[str, Any]
     ) -> dict[str, Any] | StreamingResponse:
+        priority = parse_request_priority(body)
+        body = strip_local_priority_metadata(body)
         body = normalize_responses_input(body, self.settings.max_inline_image_bytes)
         chat_body = responses_request_to_chat(body)
         chat_body = self._prepare_reasoning_request(chat_body)
@@ -347,8 +367,10 @@ class ProxyService:
                 path="/v1/responses",
                 body=chat_body,
                 classification=classification,
+                priority=priority,
             )
         )
+        self._request_priorities[request_id] = priority
         cached = self._request_cache.get(cache_key)
         if cached is not None:
             return self._cached_responses_response(chat_body, request_id, cached)
@@ -370,6 +392,7 @@ class ProxyService:
             return response
         except Exception as exc:
             self.metrics.fail_request(request_id, error_message=str(exc))
+            self._request_priorities.pop(request_id, None)
             raise
 
     @staticmethod
@@ -1594,6 +1617,7 @@ class ProxyService:
         path: str,
         body: dict[str, Any],
         classification: RequestClassification,
+        priority: RequestPriority = RequestPriority.DEFAULT,
     ) -> dict[str, Any]:
         messages = body.get("messages")
         messages = messages if isinstance(messages, list) else []
@@ -1625,6 +1649,7 @@ class ProxyService:
             "has_schema": classification.has_schema,
             "has_images": classification.has_images,
             "asks_for_reasoning": classification.asks_for_reasoning,
+            "priority": priority.label,
             "input_messages": input_messages,
             "input_chars": input_chars,
             "input_image_count": input_image_count,
@@ -1680,25 +1705,49 @@ class ProxyService:
     async def _service_slot(
         self, request_id: str, model: Any | None = None
     ) -> AsyncIterator[None]:
+        priority = self._request_priorities.get(request_id, RequestPriority.DEFAULT)
         if self.scheduler is not None:
             requested_model = model or self.settings.default_model_alias
-            async with self.scheduler.slot(request_id, str(requested_model)):
-                service_started_at = time.time()
-                self.metrics.update_request(
+            was_preempted = False
+            current_task = asyncio.current_task()
+
+            def on_preempt() -> None:
+                nonlocal was_preempted
+                was_preempted = True
+                if current_task is not None:
+                    current_task.cancel()
+
+            try:
+                async with self.scheduler.slot(
                     request_id,
-                    service_started_at=service_started_at,
-                    model=self.scheduler.runtime.normalize_alias(requested_model),
-                )
-                try:
-                    async with asyncio.timeout(
-                        self.settings.active_request_timeout_seconds
-                    ):
-                        yield
-                except TimeoutError as exc:
-                    raise ActiveRequestTimeoutError(
-                        "active request exceeded timeout after "
-                        f"{self.settings.active_request_timeout_seconds:g}s"
-                    ) from exc
+                    str(requested_model),
+                    priority=priority,
+                    on_preempt=on_preempt,
+                ):
+                    service_started_at = time.time()
+                    self.metrics.update_request(
+                        request_id,
+                        service_started_at=service_started_at,
+                        model=self.scheduler.runtime.normalize_alias(requested_model),
+                    )
+                    try:
+                        async with asyncio.timeout(
+                            self.settings.active_request_timeout_seconds
+                        ):
+                            yield
+                    except TimeoutError as exc:
+                        raise ActiveRequestTimeoutError(
+                            "active request exceeded timeout after "
+                            f"{self.settings.active_request_timeout_seconds:g}s"
+                        ) from exc
+                    except asyncio.CancelledError as exc:
+                        if was_preempted:
+                            raise RequestPreemptedError(
+                                "request preempted by a critical priority request"
+                            ) from exc
+                        raise
+            finally:
+                self._request_priorities.pop(request_id, None)
             return
 
         await self._upstream_slots.acquire()

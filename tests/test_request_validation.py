@@ -36,7 +36,7 @@ class FailingScheduler:
     runtime = Runtime()
 
     @asynccontextmanager
-    async def slot(self, request_id: str, model: str):
+    async def slot(self, request_id: str, model: str, **kwargs):
         raise ModelRuntimeError("model service unavailable")
         yield
 
@@ -96,6 +96,55 @@ def test_chat_rejects_malformed_message_parts_with_400(tmp_path: Path) -> None:
     assert_error(response, 400, "messages[0].content[0] must be an object")
 
 
+def test_chat_rejects_malformed_priority_with_400(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gemma4:e2b",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {"priority": "background"},
+        },
+    )
+
+    assert_error(
+        response,
+        400,
+        "metadata.priority must be one of: critical, highest, high, default, low, lowest",
+    )
+
+
+def test_chat_rejects_non_string_priority_with_400(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gemma4:e2b",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {"priority": 1},
+        },
+    )
+
+    assert_error(response, 400, "metadata.priority must be a string")
+
+
+def test_chat_rejects_non_object_metadata_with_400(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gemma4:e2b",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": "priority=high",
+        },
+    )
+
+    assert_error(response, 400, "metadata must be an object")
+
+
 def test_responses_rejects_missing_model_with_400(tmp_path: Path) -> None:
     client = build_client(tmp_path)
 
@@ -110,6 +159,25 @@ def test_responses_rejects_malformed_input_with_400(tmp_path: Path) -> None:
     response = client.post("/v1/responses", json={"model": "gemma4:e2b", "input": 3})
 
     assert_error(response, 400, "input must be a string or an array")
+
+
+def test_responses_rejects_malformed_priority_with_400(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gemma4:e2b",
+            "input": "hello",
+            "metadata": {"priority": "background"},
+        },
+    )
+
+    assert_error(
+        response,
+        400,
+        "metadata.priority must be one of: critical, highest, high, default, low, lowest",
+    )
 
 
 def test_chat_maps_model_runtime_errors_to_503(tmp_path: Path) -> None:

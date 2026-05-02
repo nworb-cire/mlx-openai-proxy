@@ -15,12 +15,14 @@ def test_metrics_store_tracks_active_and_history(tmp_path: Path) -> None:
             "has_schema": False,
             "has_images": False,
             "asks_for_reasoning": False,
+            "priority": "highest",
             "input_messages": 1,
             "input_chars": 42,
             "input_image_count": 0,
         }
     )
     assert len(store.get_active_requests()) == 1
+    assert store.get_active_requests()[0]["priority"] == "highest"
 
     store.complete_request(
         request_id,
@@ -37,6 +39,7 @@ def test_metrics_store_tracks_active_and_history(tmp_path: Path) -> None:
     assert history[0]["service_duration_ms"] == 250
     assert history[0]["path"] == "/v1/chat/completions"
     assert history[0]["model"] == "gemma4:26b"
+    assert history[0]["priority"] == "highest"
 
 
 def test_metrics_store_derives_queue_and_service_from_service_start(

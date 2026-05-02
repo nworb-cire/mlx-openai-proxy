@@ -247,11 +247,10 @@ def dashboard_html() -> str:
             <th>Age</th>
             <th>Model</th>
             <th>Status</th>
+            <th>Priority</th>
             <th>Input</th>
             <th>Schema</th>
             <th>Reasoning</th>
-            <th>Output</th>
-            <th>Service</th>
             <th>Wait</th>
           </tr>
         </thead>
@@ -576,12 +575,13 @@ def dashboard_html() -> str:
             `<span class="mono">${index + 1}</span>`,
             item.model || '',
             '<span class="muted">queued</span>',
+            item.priority || 'default',
             fmtInput(item),
             item.has_schema ? 'yes' : 'no',
             item.asks_for_reasoning ? 'yes' : 'no',
             `<span class="mono">${fmtAge(item.queue_ms)}</span>`,
           ])).join('')
-        : '<tr><td colspan="7" class="muted">No queued requests</td></tr>';
+        : '<tr><td colspan="8" class="muted">No queued requests</td></tr>';
 
       document.getElementById('history-body').innerHTML = recentHistory.length
         ? recentHistory.map((item) => row([

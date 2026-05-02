@@ -25,6 +25,8 @@ def test_dashboard_formats_input_by_endpoint_type() -> None:
     assert "parts.push(fmtCount(messages, 'input', 'inputs'));" in html
     assert "parts.push(fmtCount(messages, 'msg', 'msgs'));" in html
     assert "parts.push(fmtCount(images, 'img', 'imgs'));" in html
+    assert "<th>Priority</th>" in html
+    assert "item.priority || 'default'" in html
     assert "<th>Images</th>" not in html
     assert "item.input_image_count || 0," not in html
     assert 'colspan="9"' in html

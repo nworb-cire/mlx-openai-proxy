@@ -17,7 +17,7 @@ from .metrics_store import MetricsStore
 from .model_runtime import ModelRuntimeManager
 from .model_runtime import ModelRuntimeError
 from .model_scheduler import ModelScheduler
-from .service import ActiveRequestTimeoutError, ProxyService
+from .service import ActiveRequestTimeoutError, ProxyService, RequestPreemptedError
 
 
 async def _json_object_body(request: Request) -> dict[str, object]:
@@ -124,6 +124,8 @@ def create_app(
         body = await _json_object_body(request)
         try:
             return await service.chat(body)
+        except RequestPreemptedError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         except ActiveRequestTimeoutError as exc:
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except BackendError as exc:
@@ -138,6 +140,8 @@ def create_app(
         body = await _json_object_body(request)
         try:
             return await service.responses(body)
+        except RequestPreemptedError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         except ActiveRequestTimeoutError as exc:
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except BackendError as exc:
