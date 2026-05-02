@@ -18,7 +18,7 @@ from .images import normalize_chat_images, normalize_responses_input
 from .logging_utils import log_event
 from .metrics_store import MetricsStore
 from .model_runtime import configured_model_specs
-from .model_scheduler import ModelScheduler
+from .model_scheduler import ModelScheduler, QueueFullError
 from .prompting import (
     build_json_object_formatter_messages,
     build_json_object_repair_messages,
@@ -132,6 +132,10 @@ class ActiveRequestTimeoutError(RuntimeError):
 
 
 class RequestPreemptedError(RuntimeError):
+    pass
+
+
+class RequestQueueFullError(RuntimeError):
     pass
 
 
@@ -280,6 +284,7 @@ class ProxyService:
             if classification.execution_path == ExecutionPath.PASSTHROUGH:
                 if self._is_json_object_mode(body):
                     if body.get("stream"):
+                        await self._reject_if_queue_full(body.get("model"))
                         return StreamingResponse(
                             self._cache_stream(
                                 cache_key,
@@ -291,6 +296,7 @@ class ProxyService:
                     self._request_cache.set(cache_key, kind="json", payload=response)
                     return response
                 if body.get("stream"):
+                    await self._reject_if_queue_full(body.get("model"))
                     return StreamingResponse(
                         self._cache_stream(
                             cache_key,
@@ -314,6 +320,7 @@ class ProxyService:
                 == ExecutionPath.STRICT_STRUCTURED_FAST_PATH
             ):
                 if body.get("stream"):
+                    await self._reject_if_queue_full(body.get("model"))
                     return StreamingResponse(
                         self._cache_stream(
                             cache_key,
@@ -333,6 +340,7 @@ class ProxyService:
                 return public_response
 
             if body.get("stream"):
+                await self._reject_if_queue_full(body.get("model"))
                 return StreamingResponse(
                     self._cache_stream(
                         cache_key,
@@ -375,13 +383,19 @@ class ProxyService:
         if cached is not None:
             return self._cached_responses_response(chat_body, request_id, cached)
         if body.get("stream"):
-            return StreamingResponse(
-                self._cache_stream(
-                    cache_key,
-                    self._responses_stream(chat_body, request_id),
-                ),
-                media_type="text/event-stream",
-            )
+            try:
+                await self._reject_if_queue_full(chat_body.get("model"))
+                return StreamingResponse(
+                    self._cache_stream(
+                        cache_key,
+                        self._responses_stream(chat_body, request_id),
+                    ),
+                    media_type="text/event-stream",
+                )
+            except Exception as exc:
+                self.metrics.fail_request(request_id, error_message=str(exc))
+                self._request_priorities.pop(request_id, None)
+                raise
         try:
             chat_response = await self._chat_no_metrics(
                 chat_body, request_id=request_id
@@ -1746,6 +1760,8 @@ class ProxyService:
                                 "request preempted by a critical priority request"
                             ) from exc
                         raise
+            except QueueFullError as exc:
+                raise RequestQueueFullError(str(exc)) from exc
             finally:
                 self._request_priorities.pop(request_id, None)
             return
@@ -1766,3 +1782,12 @@ class ProxyService:
                 ) from exc
         finally:
             self._upstream_slots.release()
+
+    async def _reject_if_queue_full(self, model: Any | None = None) -> None:
+        if self.scheduler is None:
+            return
+        requested_model = str(model or self.settings.default_model_alias)
+        try:
+            await self.scheduler.reject_if_queue_full(requested_model)
+        except QueueFullError as exc:
+            raise RequestQueueFullError(str(exc)) from exc

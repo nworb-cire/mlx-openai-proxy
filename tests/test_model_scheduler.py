@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from mlx_openai_proxy.model_scheduler import ModelScheduler
+from mlx_openai_proxy.model_scheduler import ModelScheduler, QueueFullError
 from mlx_openai_proxy.request_priority import RequestPriority
 
 
@@ -78,6 +78,48 @@ async def test_scheduler_admits_by_priority_then_fifo() -> None:
         "low",
         "lowest",
     ]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_rejects_when_queue_is_full() -> None:
+    runtime = FakeRuntime()
+    scheduler = ModelScheduler(
+        runtime, default_alias="gemma4:e2b", max_queue_size=1
+    )
+    release_first = asyncio.Event()
+    first_entered = asyncio.Event()
+
+    async def run(request_id: str, release: asyncio.Event | None = None) -> None:
+        async with scheduler.slot(request_id, "gemma4:e2b"):
+            if request_id == "first":
+                first_entered.set()
+            if release is not None:
+                await release.wait()
+
+    first = asyncio.create_task(run("first", release_first))
+    await first_entered.wait()
+    queued = asyncio.create_task(run("queued"))
+    await asyncio.sleep(0)
+
+    with pytest.raises(QueueFullError, match="request queue is full"):
+        async with scheduler.slot("overflow", "gemma4:e2b"):
+            pass
+    with pytest.raises(QueueFullError, match="request queue is full"):
+        await scheduler.reject_if_queue_full("gemma4:e2b")
+
+    release_first.set()
+    await asyncio.gather(first, queued)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_allows_immediate_request_with_zero_queue_limit() -> None:
+    runtime = FakeRuntime()
+    scheduler = ModelScheduler(
+        runtime, default_alias="gemma4:e2b", max_queue_size=0
+    )
+
+    async with scheduler.slot("immediate", "gemma4:e2b"):
+        pass
 
 
 @pytest.mark.asyncio

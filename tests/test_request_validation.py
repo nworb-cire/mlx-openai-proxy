@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from mlx_openai_proxy.config import Settings
 from mlx_openai_proxy.main import create_app
 from mlx_openai_proxy.model_runtime import ModelRuntimeError
+from mlx_openai_proxy.model_scheduler import QueueFullError
 
 
 class FakeAsrRuntime:
@@ -38,6 +39,22 @@ class FailingScheduler:
     @asynccontextmanager
     async def slot(self, request_id: str, model: str, **kwargs):
         raise ModelRuntimeError("model service unavailable")
+        yield
+
+
+class FullScheduler:
+    class Runtime:
+        def normalize_alias(self, value: str) -> str:
+            return value
+
+    runtime = Runtime()
+
+    async def reject_if_queue_full(self, model: str) -> None:
+        raise QueueFullError("request queue is full (128 queued)")
+
+    @asynccontextmanager
+    async def slot(self, request_id: str, model: str, **kwargs):
+        raise QueueFullError("request queue is full (128 queued)")
         yield
 
 
@@ -195,6 +212,37 @@ def test_chat_maps_model_runtime_errors_to_503(tmp_path: Path) -> None:
     assert_error(response, 503, "model service unavailable")
 
 
+def test_chat_maps_full_queue_to_429(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    client.app.state.service.scheduler = FullScheduler()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gemma4:e2b",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert_error(response, 429, "request queue is full (128 queued)")
+
+
+def test_streaming_chat_maps_full_queue_to_429(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    client.app.state.service.scheduler = FullScheduler()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gemma4:e2b",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert_error(response, 429, "request queue is full (128 queued)")
+
+
 def test_responses_maps_model_runtime_errors_to_503(tmp_path: Path) -> None:
     client = build_client(tmp_path)
     client.app.state.service.scheduler = FailingScheduler()
@@ -205,3 +253,27 @@ def test_responses_maps_model_runtime_errors_to_503(tmp_path: Path) -> None:
     )
 
     assert_error(response, 503, "model service unavailable")
+
+
+def test_responses_maps_full_queue_to_429(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    client.app.state.service.scheduler = FullScheduler()
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gemma4:e2b", "input": "hello"},
+    )
+
+    assert_error(response, 429, "request queue is full (128 queued)")
+
+
+def test_streaming_responses_maps_full_queue_to_429(tmp_path: Path) -> None:
+    client = build_client(tmp_path)
+    client.app.state.service.scheduler = FullScheduler()
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gemma4:e2b", "input": "hello", "stream": True},
+    )
+
+    assert_error(response, 429, "request queue is full (128 queued)")

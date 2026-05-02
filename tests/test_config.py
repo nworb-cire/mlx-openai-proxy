@@ -31,3 +31,9 @@ def test_settings_load_models_from_config_file(tmp_path) -> None:
     assert [model.alias for model in settings.models] == ["small", "large"]
     assert settings.default_model_alias == "small"
     assert settings.models[0].parallel == 3
+
+
+def test_settings_default_queue_size_is_128() -> None:
+    settings = Settings()
+
+    assert settings.max_queue_size == 128

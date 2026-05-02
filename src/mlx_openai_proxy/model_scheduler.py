@@ -11,6 +11,10 @@ from .model_runtime import ModelRuntimeManager
 from .request_priority import RequestPriority
 
 
+class QueueFullError(RuntimeError):
+    pass
+
+
 @dataclass
 class PendingRequest:
     request_id: str
@@ -29,9 +33,16 @@ class RunningRequest:
 
 
 class ModelScheduler:
-    def __init__(self, runtime: ModelRuntimeManager, default_alias: str) -> None:
+    def __init__(
+        self,
+        runtime: ModelRuntimeManager,
+        default_alias: str,
+        *,
+        max_queue_size: int = 128,
+    ) -> None:
         self.runtime = runtime
         self.default_alias = default_alias
+        self.max_queue_size = max(0, max_queue_size)
         self._active_model = default_alias
         self._active_count = 0
         self._running_request_ids: set[str] = set()
@@ -56,6 +67,17 @@ class ModelScheduler:
                     return
             await asyncio.sleep(0)
 
+    async def reject_if_queue_full(self, model: str) -> None:
+        normalized_model = self.runtime.normalize_alias(model)
+        async with self._lock:
+            if (
+                not self._can_admit_immediately_locked(normalized_model)
+                and len(self._queue) >= self.max_queue_size
+            ):
+                raise QueueFullError(
+                    f"request queue is full ({self.max_queue_size} queued)"
+                )
+
     @asynccontextmanager
     async def slot(
         self,
@@ -78,6 +100,7 @@ class ModelScheduler:
             on_preempt=on_preempt,
         )
         async with self._lock:
+            self._raise_if_queue_full_locked(normalized_model)
             self._queue.append(pending)
             self._pump_locked()
         try:
@@ -100,6 +123,22 @@ class ModelScheduler:
         self._queue = deque(
             item for item in self._queue if item.request_id != request_id
         )
+
+    def _can_admit_immediately_locked(self, model: str) -> bool:
+        if self._switch_task is not None:
+            return False
+        if self._active_model != model:
+            return False
+        return self._active_count < self.runtime.concurrency_for(self._active_model)
+
+    def _raise_if_queue_full_locked(self, model: str) -> None:
+        if (
+            not self._can_admit_immediately_locked(model)
+            and len(self._queue) >= self.max_queue_size
+        ):
+            raise QueueFullError(
+                f"request queue is full ({self.max_queue_size} queued)"
+            )
 
     def _pump_locked(self) -> None:
         if self._switch_task is not None:
