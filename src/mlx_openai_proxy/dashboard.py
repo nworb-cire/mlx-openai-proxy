@@ -227,14 +227,12 @@ def dashboard_html() -> str:
       <table>
         <thead>
           <tr>
-            <th>Age</th>
+            <th></th>
             <th>Model</th>
             <th>Status</th>
             <th>Input</th>
             <th>Schema</th>
             <th>Reasoning</th>
-            <th>Output</th>
-            <th>Service</th>
             <th>Wait</th>
           </tr>
         </thead>
@@ -574,18 +572,16 @@ def dashboard_html() -> str:
         : '<tr><td colspan="9" class="muted">No active requests</td></tr>';
 
       document.getElementById('queued-body').innerHTML = queued.length
-        ? queued.map((item) => row([
-            fmtAge(item.age_ms),
+        ? queued.map((item, index) => row([
+            `<span class="mono">${index + 1}</span>`,
             item.model || '',
             '<span class="muted">queued</span>',
             fmtInput(item),
             item.has_schema ? 'yes' : 'no',
             item.asks_for_reasoning ? 'yes' : 'no',
-            '',
-            '',
             `<span class="mono">${fmtAge(item.queue_ms)}</span>`,
           ])).join('')
-        : '<tr><td colspan="9" class="muted">No queued requests</td></tr>';
+        : '<tr><td colspan="7" class="muted">No queued requests</td></tr>';
 
       document.getElementById('history-body').innerHTML = recentHistory.length
         ? recentHistory.map((item) => row([
