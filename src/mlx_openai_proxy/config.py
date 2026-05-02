@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     backend_timeout_seconds: float = Field(default=600.0)
     active_request_timeout_seconds: float = Field(default=600.0)
     max_upstream_concurrency: int = Field(default=2)
-    max_queue_size: int = Field(default=128, ge=0)
+    max_queue_size: int = Field(default=64, ge=0)
     lm_studio_bin: str = Field(default_factory=_default_lm_studio_bin)
 
     model_config_path: str = Field(default_factory=_default_model_config_path)

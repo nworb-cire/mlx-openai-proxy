@@ -38,7 +38,7 @@ class ModelScheduler:
         runtime: ModelRuntimeManager,
         default_alias: str,
         *,
-        max_queue_size: int = 128,
+        max_queue_size: int = 64,
     ) -> None:
         self.runtime = runtime
         self.default_alias = default_alias

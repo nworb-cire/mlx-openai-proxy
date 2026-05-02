@@ -50,11 +50,11 @@ class FullScheduler:
     runtime = Runtime()
 
     async def reject_if_queue_full(self, model: str) -> None:
-        raise QueueFullError("request queue is full (128 queued)")
+        raise QueueFullError("request queue is full (64 queued)")
 
     @asynccontextmanager
     async def slot(self, request_id: str, model: str, **kwargs):
-        raise QueueFullError("request queue is full (128 queued)")
+        raise QueueFullError("request queue is full (64 queued)")
         yield
 
 
@@ -224,7 +224,7 @@ def test_chat_maps_full_queue_to_429(tmp_path: Path) -> None:
         },
     )
 
-    assert_error(response, 429, "request queue is full (128 queued)")
+    assert_error(response, 429, "request queue is full (64 queued)")
 
 
 def test_streaming_chat_maps_full_queue_to_429(tmp_path: Path) -> None:
@@ -240,7 +240,7 @@ def test_streaming_chat_maps_full_queue_to_429(tmp_path: Path) -> None:
         },
     )
 
-    assert_error(response, 429, "request queue is full (128 queued)")
+    assert_error(response, 429, "request queue is full (64 queued)")
 
 
 def test_responses_maps_model_runtime_errors_to_503(tmp_path: Path) -> None:
@@ -264,7 +264,7 @@ def test_responses_maps_full_queue_to_429(tmp_path: Path) -> None:
         json={"model": "gemma4:e2b", "input": "hello"},
     )
 
-    assert_error(response, 429, "request queue is full (128 queued)")
+    assert_error(response, 429, "request queue is full (64 queued)")
 
 
 def test_streaming_responses_maps_full_queue_to_429(tmp_path: Path) -> None:
@@ -276,4 +276,4 @@ def test_streaming_responses_maps_full_queue_to_429(tmp_path: Path) -> None:
         json={"model": "gemma4:e2b", "input": "hello", "stream": True},
     )
 
-    assert_error(response, 429, "request queue is full (128 queued)")
+    assert_error(response, 429, "request queue is full (64 queued)")

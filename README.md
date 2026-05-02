@@ -74,7 +74,7 @@ Runtime settings are read from environment variables with the `MLX_PROXY_` prefi
 | `MLX_PROXY_METRICS_DB_PATH` | `~/.local/share/mlx-openai-proxy/metrics.db` | SQLite database used for request history and dashboard metrics. |
 | `MLX_PROXY_LM_STUDIO_BIN` | discovered `lms` or `~/.lmstudio/bin/lms` | LM Studio CLI used for model residency management. |
 | `MLX_PROXY_MAX_UPSTREAM_CONCURRENCY` | `2` | Maximum number of concurrent upstream model requests. |
-| `MLX_PROXY_MAX_QUEUE_SIZE` | `128` | Maximum number of queued model requests before new requests receive HTTP 429. |
+| `MLX_PROXY_MAX_QUEUE_SIZE` | `64` | Maximum number of queued model requests before new requests receive HTTP 429. |
 | `MLX_PROXY_BACKEND_TIMEOUT_SECONDS` | `600` | HTTP timeout for backend requests. |
 | `MLX_PROXY_ACTIVE_REQUEST_TIMEOUT_SECONDS` | `600` | Maximum active request runtime before the proxy returns a timeout. |
 | `MLX_PROXY_LOG_LEVEL` | `INFO` | Python logging level. |
