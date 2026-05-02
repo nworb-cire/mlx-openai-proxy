@@ -123,22 +123,41 @@ class ModelRuntimeManager:
                 str(spec.parallel),
                 "-y",
             )
-        except Exception:
+        except Exception as exc:
+            loaded_after_failure: list[str] = []
+            try:
+                loaded_after_failure = await self.list_loaded_aliases()
+            except Exception:
+                loaded_after_failure = []
+            if alias in loaded_after_failure:
+                self._active_alias = alias
+                return
             if previous_alias is not None and previous_alias != alias:
+                if previous_alias in loaded_after_failure:
+                    self._active_alias = previous_alias
+                    raise ModelRuntimeError(
+                        f"failed to load model '{alias}': {exc}"
+                    ) from exc
                 previous_spec = self._specs[previous_alias]
-                await self._run_lms(
-                    "load",
-                    previous_spec.key,
-                    "--identifier",
-                    previous_spec.alias,
-                    "-c",
-                    str(previous_spec.context_length),
-                    "--parallel",
-                    str(previous_spec.parallel),
-                    "-y",
-                )
-                self._active_alias = previous_alias
-            raise
+                try:
+                    await self._run_lms(
+                        "load",
+                        previous_spec.key,
+                        "--identifier",
+                        previous_spec.alias,
+                        "-c",
+                        str(previous_spec.context_length),
+                        "--parallel",
+                        str(previous_spec.parallel),
+                        "-y",
+                    )
+                    self._active_alias = previous_alias
+                except Exception as rollback_exc:
+                    raise ModelRuntimeError(
+                        f"failed to load model '{alias}': {exc}; "
+                        f"also failed to restore '{previous_alias}': {rollback_exc}"
+                    ) from exc
+            raise ModelRuntimeError(f"failed to load model '{alias}': {exc}") from exc
         self._active_alias = alias
 
     async def list_loaded_aliases(self) -> list[str]:
