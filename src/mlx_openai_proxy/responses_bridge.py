@@ -46,11 +46,24 @@ def responses_input_to_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def responses_request_to_chat(body: dict[str, Any]) -> dict[str, Any]:
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("model is required and must be a non-empty string")
+    if "input" in body and not isinstance(body["input"], str | list):
+        raise ValueError("input must be a string or an array")
+    payload = body.get("input")
+    if isinstance(payload, list):
+        for index, item in enumerate(payload):
+            if not isinstance(item, dict):
+                raise ValueError(f"input[{index}] must be an object")
+            content = item.get("content")
+            if content is not None and not isinstance(content, str | list):
+                raise ValueError(f"input[{index}].content must be a string or an array")
     if "response_format" in body:
         raise ValueError("Responses structured output must use text.format")
 
     chat_body: dict[str, Any] = {
-        "model": body["model"],
+        "model": model,
         "messages": responses_input_to_messages(body),
         "stream": bool(body.get("stream")),
     }

@@ -158,6 +158,7 @@ class ProxyService:
         }
 
     async def chat(self, body: dict[str, Any]) -> dict[str, Any] | StreamingResponse:
+        self._validate_chat_body(body)
         body = normalize_chat_images(body, self.settings.max_inline_image_bytes)
         body = self._prepare_reasoning_request(body)
         classification = classify_chat_request(body, self.settings.schema_mode)
@@ -255,6 +256,33 @@ class ProxyService:
         except Exception as exc:
             self.metrics.fail_request(request_id, error_message=str(exc))
             raise
+
+    @staticmethod
+    def _validate_chat_body(body: dict[str, Any]) -> None:
+        model = body.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("model is required and must be a non-empty string")
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            raise ValueError("messages is required and must be an array")
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                raise ValueError(f"messages[{index}] must be an object")
+            role = message.get("role")
+            if role is not None and not isinstance(role, str):
+                raise ValueError(f"messages[{index}].role must be a string")
+            content = message.get("content")
+            if content is None or isinstance(content, str):
+                continue
+            if not isinstance(content, list):
+                raise ValueError(
+                    f"messages[{index}].content must be a string or an array"
+                )
+            for part_index, part in enumerate(content):
+                if not isinstance(part, dict):
+                    raise ValueError(
+                        f"messages[{index}].content[{part_index}] must be an object"
+                    )
 
     async def _chat_structured_nonstream(
         self,

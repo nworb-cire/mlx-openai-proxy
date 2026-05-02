@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -16,6 +17,22 @@ from .metrics_store import MetricsStore
 from .model_runtime import ModelRuntimeManager
 from .model_scheduler import ModelScheduler
 from .service import ActiveRequestTimeoutError, ProxyService
+
+
+async def _json_object_body(request: Request) -> dict[str, object]:
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must be valid JSON.",
+        ) from exc
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must be a JSON object.",
+        )
+    return body
 
 
 def create_app(
@@ -103,7 +120,7 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
-        body = await request.json()
+        body = await _json_object_body(request)
         try:
             return await service.chat(body)
         except ActiveRequestTimeoutError as exc:
@@ -115,7 +132,7 @@ def create_app(
 
     @app.post("/v1/responses")
     async def responses(request: Request):
-        body = await request.json()
+        body = await _json_object_body(request)
         try:
             return await service.responses(body)
         except ActiveRequestTimeoutError as exc:
