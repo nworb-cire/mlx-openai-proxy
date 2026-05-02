@@ -31,6 +31,23 @@ class FakeRuntime(ModelRuntimeManager):
         raise AssertionError(f"unexpected lms command: {args}")
 
 
+class StaleLoadedRuntime(FakeRuntime):
+    async def _run_lms(self, *args: str) -> str:
+        if args[:2] == ("ps", "--json"):
+            import json
+
+            return json.dumps(
+                [
+                    {
+                        "identifier": "small",
+                        "contextLength": 8192,
+                        "parallel": 1,
+                    }
+                ]
+            )
+        return await super()._run_lms(*args)
+
+
 class FailingSwitchRuntime(FakeRuntime):
     async def _run_lms(self, *args: str) -> str:
         if args and args[0] == "load":
@@ -80,6 +97,34 @@ async def test_normalize_residency_keeps_existing_single_loaded_model() -> None:
 
     assert chosen == "gemma4:26b"
     assert runtime.loaded_aliases == ["gemma4:26b"]
+
+
+@pytest.mark.asyncio
+async def test_normalize_residency_reloads_loaded_model_when_parallel_is_stale() -> (
+    None
+):
+    settings = Settings(
+        models=[
+            ConfiguredModel(alias="small", key="local/small", parallel=4),
+        ]
+    )
+    runtime = StaleLoadedRuntime(settings, loaded_aliases=["small"])
+
+    chosen = await runtime.normalize_residency()
+
+    assert chosen == "small"
+    assert ("unload", "small") in runtime.commands
+    assert (
+        "load",
+        "local/small",
+        "--identifier",
+        "small",
+        "-c",
+        "8192",
+        "--parallel",
+        "4",
+        "-y",
+    ) in runtime.commands
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,13 @@ class ModelSpec:
     parallel: int
 
 
+@dataclass(frozen=True)
+class LoadedModel:
+    alias: str
+    context_length: int | None
+    parallel: int | None
+
+
 def configured_model_specs(settings: Settings) -> dict[str, ModelSpec]:
     return {
         model.alias: ModelSpec(
@@ -96,11 +103,18 @@ class ModelRuntimeManager:
             await self._switch_to_locked(alias)
 
     async def _switch_to_locked(self, alias: str) -> None:
-        loaded_aliases = await self.list_loaded_aliases()
-        if alias in loaded_aliases:
-            for loaded_alias in loaded_aliases:
-                if loaded_alias != alias:
-                    await self._run_lms("unload", loaded_alias)
+        loaded_models = await self.list_loaded_models()
+        loaded_aliases = [model.alias for model in loaded_models]
+        spec = self._specs[alias]
+        loaded_target = next(
+            (model for model in loaded_models if model.alias == alias), None
+        )
+        if loaded_target is not None and self._loaded_model_matches_spec(
+            loaded_target, spec
+        ):
+            for loaded_model in loaded_models:
+                if loaded_model.alias != alias:
+                    await self._run_lms("unload", loaded_model.alias)
             self._active_alias = alias
             return
 
@@ -110,7 +124,6 @@ class ModelRuntimeManager:
         for loaded_alias in loaded_aliases:
             await self._run_lms("unload", loaded_alias)
 
-        spec = self._specs[alias]
         try:
             await self._run_lms(
                 "load",
@@ -160,7 +173,18 @@ class ModelRuntimeManager:
             raise ModelRuntimeError(f"failed to load model '{alias}': {exc}") from exc
         self._active_alias = alias
 
+    @staticmethod
+    def _loaded_model_matches_spec(model: LoadedModel, spec: ModelSpec) -> bool:
+        if model.context_length is not None and model.context_length != spec.context_length:
+            return False
+        if model.parallel is not None and model.parallel != spec.parallel:
+            return False
+        return True
+
     async def list_loaded_aliases(self) -> list[str]:
+        return [model.alias for model in await self.list_loaded_models()]
+
+    async def list_loaded_models(self) -> list[LoadedModel]:
         output = await self._run_lms("ps", "--json")
         try:
             items = json.loads(output or "[]")
@@ -168,16 +192,35 @@ class ModelRuntimeManager:
             raise ModelRuntimeError(
                 f"failed to parse 'lms ps --json': {output}"
             ) from exc
-        loaded: list[str] = []
+        loaded: list[LoadedModel] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             identifier = item.get("identifier")
             if isinstance(identifier, str):
-                loaded.append(identifier)
+                loaded.append(
+                    LoadedModel(
+                        alias=identifier,
+                        context_length=self._optional_int(item.get("contextLength")),
+                        parallel=self._optional_int(item.get("parallel")),
+                    )
+                )
         if loaded:
-            self._active_alias = loaded[0]
+            self._active_alias = loaded[0].alias
         return loaded
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
 
     async def _run_lms(self, *args: str) -> str:
         process = await asyncio.create_subprocess_exec(
