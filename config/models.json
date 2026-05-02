@@ -3,7 +3,7 @@
     "alias": "gemma4:e2b",
     "key": "google/gemma-4-e2b",
     "context_length": 8192,
-    "parallel": 32
+    "parallel": 16
   },
   {
     "alias": "gemma4:26b",
