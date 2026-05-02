@@ -9,12 +9,6 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ReasoningVisibility(StrEnum):
-    OFF = "off"
-    COMPATIBLE = "compatible"
-    FULL = "full"
-
-
 class StructuredMode(StrEnum):
     AUTO = "auto"
     STRICT_FAST_PATH = "strict_fast_path"
@@ -119,9 +113,6 @@ class Settings(BaseSettings):
     models: list[ConfiguredModel] = Field(default_factory=_default_models)
     asr: ConfiguredAsr = Field(default_factory=_default_asr)
 
-    reasoning_visibility: ReasoningVisibility = Field(
-        default=ReasoningVisibility.COMPATIBLE
-    )
     schema_mode: StructuredMode = Field(default=StructuredMode.AUTO)
     phase2_max_tokens: int = Field(default=1024)
     phase2_temperature: float = Field(default=0.0)

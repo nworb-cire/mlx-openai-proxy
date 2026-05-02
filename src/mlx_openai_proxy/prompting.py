@@ -24,6 +24,14 @@ Return only valid JSON that matches the provided schema.
 Do not add markdown or commentary."""
 
 
+JSON_OBJECT_FORMATTER_SYSTEM_PROMPT = """Output JSON only.
+Convert the canonical answer to one JSON object."""
+
+
+JSON_OBJECT_REPAIR_SYSTEM_PROMPT = """You are repairing JSON output.
+Output JSON only."""
+
+
 def build_phase1_messages(
     original_messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -123,6 +131,46 @@ def build_repair_messages(
             "content": (
                 "Schema:\n"
                 f"{compact_json(schema)}\n\n"
+                "Canonical answer:\n"
+                f"{canonical_answer}\n\n"
+                "Invalid output:\n"
+                f"{invalid_output}\n\n"
+                "Validation error:\n"
+                f"{validation_error}\n"
+            ),
+        },
+    ]
+
+
+def build_json_object_formatter_messages(
+    original_messages: list[dict[str, Any]],
+    canonical_answer: str,
+) -> list[dict[str, Any]]:
+    summarized_messages = sanitize_messages_for_formatter(original_messages)
+    return [
+        {
+            "role": "user",
+            "content": (
+                f"{JSON_OBJECT_FORMATTER_SYSTEM_PROMPT}\n\n"
+                "Original user request:\n"
+                f"{compact_json(summarized_messages)}\n\n"
+                "Canonical answer:\n"
+                f"{canonical_answer}\n"
+            ),
+        },
+    ]
+
+
+def build_json_object_repair_messages(
+    canonical_answer: str,
+    invalid_output: str,
+    validation_error: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "user",
+            "content": (
+                f"{JSON_OBJECT_REPAIR_SYSTEM_PROMPT}\n\n"
                 "Canonical answer:\n"
                 f"{canonical_answer}\n\n"
                 "Invalid output:\n"

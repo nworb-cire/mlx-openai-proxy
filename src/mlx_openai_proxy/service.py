@@ -13,13 +13,15 @@ from fastapi.responses import StreamingResponse
 
 from .backend import BackendClient, BackendError
 from .classifier import ExecutionPath, RequestClassification, classify_chat_request
-from .config import ReasoningVisibility, Settings
+from .config import Settings
 from .images import normalize_chat_images, normalize_responses_input
 from .logging_utils import log_event
 from .metrics_store import MetricsStore
 from .model_runtime import configured_model_specs
 from .model_scheduler import ModelScheduler
 from .prompting import (
+    build_json_object_formatter_messages,
+    build_json_object_repair_messages,
     build_phase1_messages,
     build_phase2_messages,
     build_repair_messages,
@@ -30,12 +32,17 @@ from .schema_utils import (
     compact_json,
     extract_json_schema,
     validate_incoming_schema,
+    validate_json_object_text,
     validate_json_text,
     validation_error_message,
 )
 
 GEMMA_THOUGHT_OPEN = "<|channel>thought"
 GEMMA_THOUGHT_CLOSE = "<channel|>"
+JSON_OBJECT_USER_INSTRUCTION = (
+    "Return only one valid JSON object. "
+    "Do not add markdown, prose, or code fences."
+)
 
 
 class GemmaThoughtStreamParser:
@@ -172,6 +179,13 @@ class ProxyService:
         )
         try:
             if classification.execution_path == ExecutionPath.PASSTHROUGH:
+                if self._is_json_object_mode(body):
+                    if body.get("stream"):
+                        return StreamingResponse(
+                            self._chat_json_object_stream(body, request_id),
+                            media_type="text/event-stream",
+                        )
+                    return await self._chat_json_object_nonstream(body, request_id)
                 if body.get("stream"):
                     return StreamingResponse(
                         self._passthrough_chat_stream(body, request_id),
@@ -182,7 +196,7 @@ class ProxyService:
                         body, request_id=request_id
                     )
                 self._complete_chat_metrics(request_id, response)
-                return response
+                return self._public_chat_response(response)
 
             if (
                 classification.execution_path
@@ -190,7 +204,7 @@ class ProxyService:
             ):
                 if body.get("stream"):
                     return StreamingResponse(
-                        self._passthrough_chat_stream(body, request_id),
+                        self._chat_strict_structured_stream(body, request_id),
                         media_type="text/event-stream",
                     )
                 async with self._service_slot(request_id, body.get("model")):
@@ -198,7 +212,7 @@ class ProxyService:
                         body, request_id=request_id
                     )
                 self._complete_chat_metrics(request_id, response)
-                return response
+                return self._public_chat_response(response)
 
             if body.get("stream"):
                 return StreamingResponse(
@@ -262,7 +276,7 @@ class ProxyService:
             phase1_elapsed = time.perf_counter() - phase1_started
             phase1_message = phase1_response["choices"][0]["message"]
             canonical_answer = phase1_message.get("content", "")
-            reasoning_content = phase1_message.get("reasoning_content", "")
+            reasoning_content = self._message_reasoning_content(phase1_message)
 
             phase2_started = time.perf_counter()
             phase2_response, final_json_text = await self._run_phase2(
@@ -275,8 +289,8 @@ class ProxyService:
         merged = copy.deepcopy(phase2_response)
         merged_choice = merged["choices"][0]["message"]
         merged_choice["content"] = final_json_text
-        if self.settings.reasoning_visibility != ReasoningVisibility.OFF:
-            merged_choice["reasoning_content"] = reasoning_content
+        if reasoning_content:
+            merged_choice["_reasoning_content"] = reasoning_content
         merged["usage"] = self._merge_usage(
             phase1_response.get("usage", {}),
             phase2_response.get("usage", {}),
@@ -296,7 +310,7 @@ class ProxyService:
             phase1_latency_ms=int(phase1_elapsed * 1000),
             phase2_latency_ms=int(phase2_elapsed * 1000),
         )
-        return merged
+        return self._public_chat_response(merged)
 
     async def _chat_structured_stream(
         self,
@@ -356,27 +370,6 @@ class ProxyService:
                             request_id,
                             reasoning_delta=reasoning_delta,
                         )
-                        if (
-                            self.settings.reasoning_visibility
-                            != ReasoningVisibility.OFF
-                        ):
-                            yield self._sse(
-                                {
-                                    "id": response_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": created,
-                                    "model": model,
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {
-                                                "reasoning_content": reasoning_delta
-                                            },
-                                            "finish_reason": None,
-                                        }
-                                    ],
-                                }
-                            )
                     content_delta = delta.get("content")
                     if isinstance(content_delta, str):
                         content_accumulator.append(content_delta)
@@ -471,6 +464,89 @@ class ProxyService:
             self.metrics.fail_request(request_id, error_message=str(exc))
             raise
 
+    async def _chat_json_object_nonstream(
+        self,
+        original_body: dict[str, Any],
+        request_id: str,
+    ) -> dict[str, Any]:
+        if not self._reasoning_requested(original_body):
+            async with self._service_slot(request_id, original_body.get("model")):
+                started = time.perf_counter()
+                response = await self._buffered_chat_completion(
+                    original_body,
+                    request_id=request_id,
+                )
+                raw_text = response["choices"][0]["message"].get("content", "") or ""
+                try:
+                    _, final_json_text = validate_json_object_text(raw_text)
+                    response["choices"][0]["message"]["content"] = final_json_text
+                    elapsed = time.perf_counter() - started
+                    self._complete_chat_metrics(
+                        request_id,
+                        response,
+                        service_duration_ms=int(elapsed * 1000),
+                    )
+                    return self._public_chat_response(response)
+                except Exception:
+                    phase2_started = time.perf_counter()
+                    phase2_response, final_json_text = (
+                        await self._run_json_object_phase2(
+                            original_body=original_body,
+                            canonical_answer=raw_text,
+                        )
+                    )
+                    phase2_elapsed = time.perf_counter() - phase2_started
+                    merged = copy.deepcopy(phase2_response)
+                    merged_choice = merged["choices"][0]["message"]
+                    merged_choice["content"] = final_json_text
+                    merged["usage"] = self._merge_usage(
+                        response.get("usage", {}),
+                        phase2_response.get("usage", {}),
+                    )
+                    elapsed = time.perf_counter() - started
+                    self._complete_chat_metrics(
+                        request_id,
+                        merged,
+                        phase2_latency_ms=int(phase2_elapsed * 1000),
+                        service_duration_ms=int(elapsed * 1000),
+                    )
+                    return self._public_chat_response(merged)
+
+        async with self._service_slot(request_id, original_body.get("model")):
+            phase1_started = time.perf_counter()
+            phase1_response = await self._buffered_chat_completion(
+                self._make_phase1_body(original_body, stream=False),
+                request_id=request_id,
+            )
+            phase1_elapsed = time.perf_counter() - phase1_started
+            phase1_message = phase1_response["choices"][0]["message"]
+            canonical_answer = phase1_message.get("content", "")
+            reasoning_content = self._message_reasoning_content(phase1_message)
+
+            phase2_started = time.perf_counter()
+            phase2_response, final_json_text = await self._run_json_object_phase2(
+                original_body=original_body,
+                canonical_answer=canonical_answer,
+            )
+            phase2_elapsed = time.perf_counter() - phase2_started
+
+        merged = copy.deepcopy(phase2_response)
+        merged_choice = merged["choices"][0]["message"]
+        merged_choice["content"] = final_json_text
+        if reasoning_content:
+            merged_choice["_reasoning_content"] = reasoning_content
+        merged["usage"] = self._merge_usage(
+            phase1_response.get("usage", {}),
+            phase2_response.get("usage", {}),
+        )
+        self._complete_chat_metrics(
+            request_id,
+            merged,
+            phase1_latency_ms=int(phase1_elapsed * 1000),
+            phase2_latency_ms=int(phase2_elapsed * 1000),
+        )
+        return self._public_chat_response(merged)
+
     async def _responses_stream(
         self, chat_body: dict[str, Any], request_id: str
     ) -> AsyncIterator[bytes]:
@@ -493,17 +569,6 @@ class ProxyService:
             self.metrics.fail_request(request_id, error_message=str(exc))
             raise
 
-        reasoning = chat_response["choices"][0]["message"].get("reasoning_content", "")
-        if reasoning:
-            for chunk in chunk_text(reasoning, self.settings.final_chunk_size):
-                yield self._sse(
-                    {
-                        "type": "response.reasoning_text.delta",
-                        "response_id": response_id,
-                        "delta": chunk,
-                    }
-                )
-
         for chunk in chunk_text(
             response_obj["output_text"], self.settings.final_chunk_size
         ):
@@ -521,6 +586,195 @@ class ProxyService:
         yield b"data: [DONE]\n\n"
         self._complete_responses_metrics(request_id, response_obj, chat_response)
 
+    async def _chat_json_object_stream(
+        self,
+        body: dict[str, Any],
+        request_id: str,
+    ) -> AsyncIterator[bytes]:
+        response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        created = int(time.time())
+        model = body.get("model")
+        stream_include_usage = bool(
+            body.get("stream_options", {}).get("include_usage")
+        )
+
+        try:
+            yield self._sse(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            async with self._service_slot(request_id, body.get("model")):
+                started = time.perf_counter()
+                response = await self._buffered_chat_completion(
+                    body,
+                    request_id=request_id,
+                )
+                raw_text = response["choices"][0]["message"].get("content", "") or ""
+                phase2_elapsed = 0.0
+                try:
+                    _, content = validate_json_object_text(raw_text)
+                    usage = response.get("usage", {})
+                except Exception:
+                    phase2_started = time.perf_counter()
+                    phase2_response, content = await self._run_json_object_phase2(
+                        original_body=body,
+                        canonical_answer=raw_text,
+                    )
+                    phase2_elapsed = time.perf_counter() - phase2_started
+                    usage = self._merge_usage(
+                        response.get("usage", {}),
+                        phase2_response.get("usage", {}),
+                    )
+                elapsed = time.perf_counter() - started
+            for chunk in chunk_text(content, self.settings.final_chunk_size):
+                yield self._sse(
+                    {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": chunk},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            if stream_include_usage:
+                yield self._sse(
+                    {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [],
+                        "usage": usage,
+                    }
+                )
+            yield self._sse(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+            )
+            yield b"data: [DONE]\n\n"
+            self.metrics.complete_request(
+                request_id,
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                reasoning_tokens=(usage.get("completion_tokens_details") or {}).get(
+                    "reasoning_tokens"
+                ),
+                output_chars=len(content),
+                reasoning_chars=0,
+                phase2_latency_ms=int(phase2_elapsed * 1000)
+                if phase2_elapsed
+                else None,
+                service_duration_ms=int(elapsed * 1000),
+            )
+        except Exception as exc:
+            self.metrics.fail_request(request_id, error_message=str(exc))
+            raise
+
+    async def _chat_strict_structured_stream(
+        self,
+        body: dict[str, Any],
+        request_id: str,
+    ) -> AsyncIterator[bytes]:
+        try:
+            async with self._service_slot(request_id, body.get("model")):
+                response = await self._buffered_chat_completion(
+                    body, request_id=request_id
+                )
+            self._complete_chat_metrics(request_id, response)
+            public_response = self._public_chat_response(response)
+            response_id = public_response["id"]
+            created = public_response["created"]
+            model = public_response.get("model")
+            content = (
+                public_response["choices"][0]["message"].get("content", "") or ""
+            )
+
+            yield self._sse(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            for chunk in chunk_text(content, self.settings.final_chunk_size):
+                yield self._sse(
+                    {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": chunk},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            if bool(body.get("stream_options", {}).get("include_usage")):
+                yield self._sse(
+                    {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [],
+                        "usage": public_response.get("usage", {}),
+                    }
+                )
+            yield self._sse(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": public_response["choices"][0].get(
+                                "finish_reason", "stop"
+                            ),
+                        }
+                    ],
+                }
+            )
+            yield b"data: [DONE]\n\n"
+        except Exception as exc:
+            self.metrics.fail_request(request_id, error_message=str(exc))
+            raise
+
     async def _chat_no_metrics(
         self,
         body: dict[str, Any],
@@ -531,18 +785,102 @@ class ProxyService:
         body = self._prepare_reasoning_request(body)
         classification = classify_chat_request(body, self.settings.schema_mode)
         if classification.execution_path == ExecutionPath.PASSTHROUGH:
+            if self._is_json_object_mode(body):
+                return await self._chat_json_object_nonstream_without_metrics(
+                    body, request_id=request_id
+                )
             if request_id is None:
-                return await self.backend.post_json("/chat/completions", body)
+                return await self.backend.post_json(
+                    "/chat/completions", self._prepare_backend_body(body)
+                )
             async with self._service_slot(request_id, body.get("model")):
-                return await self._buffered_chat_completion(body, request_id=request_id)
+                response = await self._buffered_chat_completion(
+                    body, request_id=request_id
+                )
+            return response
         if classification.execution_path == ExecutionPath.STRICT_STRUCTURED_FAST_PATH:
             if request_id is None:
-                return await self.backend.post_json("/chat/completions", body)
+                return await self.backend.post_json(
+                    "/chat/completions", self._prepare_backend_body(body)
+                )
             async with self._service_slot(request_id, body.get("model")):
                 return await self._buffered_chat_completion(body, request_id=request_id)
         return await self._chat_structured_nonstream_without_metrics(
             body, request_id=request_id
         )
+
+    async def _chat_json_object_nonstream_without_metrics(
+        self,
+        original_body: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._reasoning_requested(original_body):
+            if request_id is None:
+                response = await self.backend.post_json(
+                    "/chat/completions",
+                    self._prepare_backend_body(original_body),
+                )
+            else:
+                async with self._service_slot(request_id, original_body.get("model")):
+                    response = await self._buffered_chat_completion(
+                        original_body,
+                        request_id=request_id,
+                    )
+            raw_text = response["choices"][0]["message"].get("content", "") or ""
+            try:
+                _, final_json_text = validate_json_object_text(raw_text)
+                response["choices"][0]["message"]["content"] = final_json_text
+                return response
+            except Exception:
+                phase2_response, final_json_text = await self._run_json_object_phase2(
+                    original_body=original_body,
+                    canonical_answer=raw_text,
+                )
+                merged = copy.deepcopy(phase2_response)
+                merged_choice = merged["choices"][0]["message"]
+                merged_choice["content"] = final_json_text
+                merged["usage"] = self._merge_usage(
+                    response.get("usage", {}),
+                    phase2_response.get("usage", {}),
+                )
+                return merged
+
+        if request_id is None:
+            phase1_response = await self.backend.post_json(
+                "/chat/completions",
+                self._make_phase1_body(original_body, stream=False),
+            )
+            phase1_message = phase1_response["choices"][0]["message"]
+            canonical_answer = phase1_message.get("content", "")
+            reasoning_content = self._message_reasoning_content(phase1_message)
+            phase2_response, final_json_text = await self._run_json_object_phase2(
+                original_body=original_body,
+                canonical_answer=canonical_answer,
+            )
+        else:
+            async with self._service_slot(request_id, original_body.get("model")):
+                phase1_response = await self._buffered_chat_completion(
+                    self._make_phase1_body(original_body, stream=False),
+                    request_id=request_id,
+                )
+                phase1_message = phase1_response["choices"][0]["message"]
+                canonical_answer = phase1_message.get("content", "")
+                reasoning_content = self._message_reasoning_content(phase1_message)
+                phase2_response, final_json_text = await self._run_json_object_phase2(
+                    original_body=original_body,
+                    canonical_answer=canonical_answer,
+                )
+        merged = copy.deepcopy(phase2_response)
+        merged_choice = merged["choices"][0]["message"]
+        merged_choice["content"] = final_json_text
+        if reasoning_content:
+            merged_choice["_reasoning_content"] = reasoning_content
+        merged["usage"] = self._merge_usage(
+            phase1_response.get("usage", {}),
+            phase2_response.get("usage", {}),
+        )
+        return merged
 
     async def _chat_structured_nonstream_without_metrics(
         self,
@@ -562,7 +900,7 @@ class ProxyService:
             )
             phase1_message = phase1_response["choices"][0]["message"]
             canonical_answer = phase1_message.get("content", "")
-            reasoning_content = phase1_message.get("reasoning_content", "")
+            reasoning_content = self._message_reasoning_content(phase1_message)
             phase2_response, final_json_text = await self._run_phase2(
                 original_body=original_body,
                 schema=schema,
@@ -576,7 +914,7 @@ class ProxyService:
                 )
                 phase1_message = phase1_response["choices"][0]["message"]
                 canonical_answer = phase1_message.get("content", "")
-                reasoning_content = phase1_message.get("reasoning_content", "")
+                reasoning_content = self._message_reasoning_content(phase1_message)
                 phase2_response, final_json_text = await self._run_phase2(
                     original_body=original_body,
                     schema=schema,
@@ -585,8 +923,8 @@ class ProxyService:
         merged = copy.deepcopy(phase2_response)
         merged_choice = merged["choices"][0]["message"]
         merged_choice["content"] = final_json_text
-        if self.settings.reasoning_visibility != ReasoningVisibility.OFF:
-            merged_choice["reasoning_content"] = reasoning_content
+        if reasoning_content:
+            merged_choice["_reasoning_content"] = reasoning_content
         merged["usage"] = self._merge_usage(
             phase1_response.get("usage", {}),
             phase2_response.get("usage", {}),
@@ -603,8 +941,11 @@ class ProxyService:
             reasoning_parts: list[str] = []
             output_parts: list[str] = []
             gemma_parser = self._make_gemma_stream_parser(body.get("model"))
+            backend_body = self._prepare_backend_body(body)
             async with self._service_slot(request_id, body.get("model")):
-                async for event in self.backend.post_stream("/chat/completions", body):
+                async for event in self.backend.post_stream(
+                    "/chat/completions", backend_body
+                ):
                     if event is None:
                         break
                     if "usage" in event:
@@ -612,8 +953,13 @@ class ProxyService:
                         yield self._sse(event)
                         continue
                     if gemma_parser is None:
+                        patched_choices: list[dict[str, Any]] = []
                         for choice in event.get("choices", []):
+                            if not isinstance(choice, dict):
+                                continue
                             delta = choice.get("delta", {})
+                            if not isinstance(delta, dict):
+                                delta = {}
                             reasoning = delta.get("reasoning_content")
                             if isinstance(reasoning, str):
                                 reasoning_parts.append(reasoning)
@@ -628,7 +974,22 @@ class ProxyService:
                                     request_id,
                                     output_delta=content,
                                 )
-                        yield self._sse(event)
+                            public_delta = {
+                                key: value
+                                for key, value in delta.items()
+                                if key != "reasoning_content"
+                            }
+                            if not public_delta and choice.get("finish_reason") is None:
+                                continue
+                            patched_choices.append(
+                                {
+                                    **choice,
+                                    "delta": public_delta,
+                                }
+                            )
+                        if patched_choices or not event.get("choices"):
+                            patched_event = {**event, "choices": patched_choices}
+                            yield self._sse(patched_event)
                         continue
                     for choice in event.get("choices", []):
                         if not isinstance(choice, dict):
@@ -652,14 +1013,6 @@ class ProxyService:
                             self.metrics.append_progress(
                                 request_id, reasoning_delta=reasoning
                             )
-                            yield self._sse(
-                                self._stream_event_from_choice(
-                                    event,
-                                    index=index,
-                                    delta={"reasoning_content": reasoning},
-                                    finish_reason=None,
-                                )
-                            )
                         content_delta = delta.get("content")
                         if isinstance(content_delta, str):
                             parsed_reasoning, parsed_content = gemma_parser.feed(
@@ -669,14 +1022,6 @@ class ProxyService:
                                 reasoning_parts.append(piece)
                                 self.metrics.append_progress(
                                     request_id, reasoning_delta=piece
-                                )
-                                yield self._sse(
-                                    self._stream_event_from_choice(
-                                        event,
-                                        index=index,
-                                        delta={"reasoning_content": piece},
-                                        finish_reason=None,
-                                    )
                                 )
                             for piece in parsed_content:
                                 output_parts.append(piece)
@@ -749,7 +1094,7 @@ class ProxyService:
 
         try:
             async for event in self.backend.post_stream(
-                "/chat/completions", stream_body
+                "/chat/completions", self._prepare_backend_body(stream_body)
             ):
                 if event is None:
                     break
@@ -835,7 +1180,7 @@ class ProxyService:
         }
         reasoning_text = "".join(reasoning_parts)
         if reasoning_text:
-            message["reasoning_content"] = reasoning_text
+            message["_reasoning_content"] = reasoning_text
 
         response: dict[str, Any] = {
             "id": response_id or f"chatcmpl-{uuid.uuid4().hex[:24]}",
@@ -866,7 +1211,63 @@ class ProxyService:
         return body
 
     def _prepare_reasoning_request(self, body: dict[str, Any]) -> dict[str, Any]:
-        return body
+        prepared = copy.deepcopy(body)
+        if "reasoning" in prepared:
+            raise ValueError("Chat Completions reasoning must use reasoning_effort")
+        if (
+            prepared.get("max_completion_tokens") is not None
+            and prepared.get("max_tokens") is None
+        ):
+            prepared["max_tokens"] = prepared["max_completion_tokens"]
+        return prepared
+
+    @staticmethod
+    def _is_json_object_mode(body: dict[str, Any]) -> bool:
+        response_format = body.get("response_format")
+        return (
+            isinstance(response_format, dict)
+            and response_format.get("type") == "json_object"
+        )
+
+    @staticmethod
+    def _reasoning_requested(body: dict[str, Any]) -> bool:
+        effort = body.get("reasoning_effort")
+        return isinstance(effort, str) and effort.lower() != "none"
+
+    @classmethod
+    def _prepare_backend_body(cls, body: dict[str, Any]) -> dict[str, Any]:
+        backend_body = copy.deepcopy(body)
+        backend_body.setdefault("reasoning_effort", "none")
+        if cls._is_json_object_mode(backend_body):
+            backend_body.pop("response_format", None)
+            messages = backend_body.get("messages")
+            if not isinstance(messages, list):
+                messages = []
+            backend_body["messages"] = [
+                *messages,
+                {"role": "user", "content": JSON_OBJECT_USER_INSTRUCTION},
+            ]
+        return backend_body
+
+    @staticmethod
+    def _message_reasoning_content(message: dict[str, Any]) -> str:
+        reasoning = message.get("_reasoning_content")
+        if not isinstance(reasoning, str):
+            reasoning = message.get("reasoning_content")
+        return reasoning if isinstance(reasoning, str) else ""
+
+    @classmethod
+    def _public_chat_response(cls, response: dict[str, Any]) -> dict[str, Any]:
+        public_response = copy.deepcopy(response)
+        for choice in public_response.get("choices", []):
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
+            message.pop("_reasoning_content", None)
+            message.pop("reasoning_content", None)
+        return public_response
 
     def _make_gemma_stream_parser(self, model: Any) -> GemmaThoughtStreamParser | None:
         if self._is_gemma4_model(model):
@@ -924,7 +1325,9 @@ class ProxyService:
             "response_format": original_body["response_format"],
         }
 
-        phase2_response = await self.backend.post_json("/chat/completions", phase2_body)
+        phase2_response = await self.backend.post_json(
+            "/chat/completions", self._prepare_backend_body(phase2_body)
+        )
         raw_text = phase2_response["choices"][0]["message"].get("content", "")
 
         try:
@@ -950,7 +1353,7 @@ class ProxyService:
                 "response_format": original_body["response_format"],
             }
             phase2_response = await self.backend.post_json(
-                "/chat/completions", repair_body
+                "/chat/completions", self._prepare_backend_body(repair_body)
             )
             raw_text = phase2_response["choices"][0]["message"].get("content", "")
             try:
@@ -961,6 +1364,62 @@ class ProxyService:
 
         raise BackendError(
             f"Schema repair failed: {validation_error_message(last_error)}"
+        )
+
+    async def _run_json_object_phase2(
+        self,
+        original_body: dict[str, Any],
+        canonical_answer: str,
+    ) -> tuple[dict[str, Any], str]:
+        phase2_body: dict[str, Any] = {
+            "model": original_body["model"],
+            "messages": build_json_object_formatter_messages(
+                original_body.get("messages", []), canonical_answer
+            ),
+            "stream": False,
+            "temperature": self.settings.phase2_temperature,
+            "top_p": self.settings.phase2_top_p,
+            "top_k": self.settings.phase2_top_k,
+            "max_tokens": self.settings.phase2_max_tokens,
+        }
+
+        phase2_response = await self.backend.post_json(
+            "/chat/completions", self._prepare_backend_body(phase2_body)
+        )
+        raw_text = phase2_response["choices"][0]["message"].get("content", "")
+
+        try:
+            _, normalized = validate_json_object_text(raw_text)
+            return phase2_response, normalized
+        except Exception as exc:
+            last_error = exc
+
+        for _ in range(self.settings.max_repair_attempts):
+            repair_body: dict[str, Any] = {
+                "model": original_body["model"],
+                "messages": build_json_object_repair_messages(
+                    canonical_answer=canonical_answer,
+                    invalid_output=raw_text,
+                    validation_error=validation_error_message(last_error),
+                ),
+                "stream": False,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 1,
+                "max_tokens": self.settings.phase2_max_tokens,
+            }
+            phase2_response = await self.backend.post_json(
+                "/chat/completions", self._prepare_backend_body(repair_body)
+            )
+            raw_text = phase2_response["choices"][0]["message"].get("content", "")
+            try:
+                _, normalized = validate_json_object_text(raw_text)
+                return phase2_response, normalized
+            except Exception as exc:
+                last_error = exc
+
+        raise BackendError(
+            f"JSON object repair failed: {validation_error_message(last_error)}"
         )
 
     @staticmethod
@@ -1047,7 +1506,7 @@ class ProxyService:
                 "reasoning_tokens"
             ),
             output_chars=len(message.get("content", "") or ""),
-            reasoning_chars=len(message.get("reasoning_content", "") or ""),
+            reasoning_chars=len(self._message_reasoning_content(message)),
             phase1_latency_ms=phase1_latency_ms,
             phase2_latency_ms=phase2_latency_ms,
             service_duration_ms=service_duration_ms,
@@ -1060,8 +1519,8 @@ class ProxyService:
         chat_response: dict[str, Any],
     ) -> None:
         usage = response_obj.get("usage", {})
-        reasoning = (
-            chat_response["choices"][0]["message"].get("reasoning_content", "") or ""
+        reasoning = self._message_reasoning_content(
+            chat_response["choices"][0]["message"]
         )
         self.metrics.complete_request(
             request_id,

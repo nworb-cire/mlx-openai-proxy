@@ -55,17 +55,21 @@ def _has_images(messages: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _explicit_reasoning_requested(body: dict[str, Any]) -> bool:
+    effort = body.get("reasoning_effort")
+    if isinstance(effort, str):
+        return effort.lower() != "none"
+    return False
+
+
 def classify_chat_request(
     body: dict[str, Any], mode: StructuredMode
 ) -> RequestClassification:
     messages = body.get("messages")
     messages = messages if isinstance(messages, list) else []
-    text = _body_text(messages)
     has_schema = extract_json_schema(body) is not None
     has_images = _has_images(messages)
-    asks_for_reasoning = (
-        bool(body.get("reasoning")) or "reason" in text or "think" in text
-    )
+    asks_for_reasoning = _explicit_reasoning_requested(body)
 
     if not has_schema:
         return RequestClassification(
@@ -94,21 +98,13 @@ def classify_chat_request(
             reason="forced_two_phase",
         )
 
-    extraction_like = any(
-        token in text for token in ("extract", "classify", "label", "sentiment")
-    )
-    reasoning_heavy = any(
-        token in text
-        for token in ("why", "because", "explain", "analyze", "compute", "math")
-    )
-
-    if extraction_like and not reasoning_heavy and not has_images and len(text) < 600:
+    if not asks_for_reasoning:
         return RequestClassification(
             execution_path=ExecutionPath.STRICT_STRUCTURED_FAST_PATH,
             has_schema=True,
             has_images=has_images,
             asks_for_reasoning=asks_for_reasoning,
-            reason="simple_extraction_heuristic",
+            reason="no_reasoning_requested",
         )
 
     return RequestClassification(
@@ -116,5 +112,5 @@ def classify_chat_request(
         has_schema=True,
         has_images=has_images,
         asks_for_reasoning=asks_for_reasoning,
-        reason="default_two_phase_for_schema",
+        reason="reasoning_requested",
     )

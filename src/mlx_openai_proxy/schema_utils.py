@@ -41,6 +41,14 @@ def validate_json_text(text: str, schema: dict[str, Any]) -> tuple[dict[str, Any
     return parsed, normalized
 
 
+def validate_json_object_text(text: str) -> tuple[dict[str, Any], str]:
+    normalized = normalize_json_text(text)
+    parsed = json.loads(normalized)
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON mode output must be a JSON object")
+    return parsed, normalized
+
+
 def validation_error_message(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return exc.message

@@ -46,19 +46,43 @@ def responses_input_to_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def responses_request_to_chat(body: dict[str, Any]) -> dict[str, Any]:
+    if "response_format" in body:
+        raise ValueError("Responses structured output must use text.format")
+
     chat_body: dict[str, Any] = {
         "model": body["model"],
         "messages": responses_input_to_messages(body),
         "stream": bool(body.get("stream")),
     }
-    for key in ("temperature", "top_p", "top_k", "response_format", "metadata"):
+    for key in ("temperature", "top_p", "top_k", "metadata"):
         if key in body:
             chat_body[key] = body[key]
+
+    text = body.get("text")
+    if isinstance(text, dict) and isinstance(text.get("format"), dict):
+        text_format = text["format"]
+        if text_format.get("type") == "json_schema":
+            json_schema = {
+                key: text_format[key]
+                for key in ("name", "description", "schema", "strict")
+                if key in text_format
+            }
+            chat_body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": json_schema,
+            }
+        elif text_format.get("type") == "json_object":
+            chat_body["response_format"] = {"type": "json_object"}
+        elif text_format.get("type") == "text":
+            chat_body["response_format"] = {"type": "text"}
+
     max_output_tokens = body.get("max_output_tokens")
     if max_output_tokens is not None:
         chat_body["max_tokens"] = max_output_tokens
-    if "reasoning" in body:
-        chat_body["reasoning"] = body["reasoning"]
+
+    reasoning = body.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("effort") is not None:
+        chat_body["reasoning_effort"] = reasoning["effort"]
     return chat_body
 
 
@@ -66,20 +90,9 @@ def chat_response_to_responses(chat_response: dict[str, Any]) -> dict[str, Any]:
     choice = chat_response["choices"][0]
     message = choice["message"]
     output_text = message.get("content", "")
-    reasoning = message.get("reasoning_content", "")
     response_id = f"resp_{uuid.uuid4().hex}"
 
-    output_items: list[dict[str, Any]] = []
-    if reasoning:
-        output_items.append(
-            {
-                "id": f"rs_{uuid.uuid4().hex}",
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": reasoning}],
-                "content": [{"type": "reasoning_text", "text": reasoning}],
-            }
-        )
-    output_items.append(
+    output_items: list[dict[str, Any]] = [
         {
             "id": f"msg_{uuid.uuid4().hex}",
             "type": "message",
@@ -89,7 +102,7 @@ def chat_response_to_responses(chat_response: dict[str, Any]) -> dict[str, Any]:
                 {"type": "output_text", "text": output_text, "annotations": []}
             ],
         }
-    )
+    ]
 
     return {
         "id": response_id,

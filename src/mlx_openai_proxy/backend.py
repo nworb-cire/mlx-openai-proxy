@@ -21,41 +21,56 @@ class BackendClient:
         await self._client.aclose()
 
     async def get_json(self, path: str) -> dict[str, Any]:
-        response = await self._client.get(path)
+        try:
+            response = await self._client.get(path)
+        except httpx.TransportError as exc:
+            raise BackendError(str(exc)) from exc
         self._raise_for_status(response)
         return response.json()
 
     async def post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        response = await self._client.post(path, json=body)
+        try:
+            response = await self._client.post(path, json=body)
+        except httpx.TransportError as exc:
+            raise BackendError(str(exc)) from exc
         self._raise_for_status(response)
         return response.json()
 
     async def post_stream(
         self, path: str, body: dict[str, Any]
     ) -> AsyncIterator[dict[str, Any] | None]:
-        async with self._client.stream("POST", path, json=body) as response:
-            await self._raise_for_status_async(response)
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:]
-                if payload == "[DONE]":
-                    yield None
-                    break
-                yield json.loads(payload)
+        try:
+            async with self._client.stream("POST", path, json=body) as response:
+                await self._raise_for_status_async(response)
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        yield None
+                        break
+                    yield json.loads(payload)
+        except httpx.TransportError as exc:
+            raise BackendError(str(exc)) from exc
 
     async def proxy_stream(
         self, path: str, body: dict[str, Any]
     ) -> AsyncIterator[bytes]:
-        async with self._client.stream("POST", path, json=body) as response:
-            await self._raise_for_status_async(response)
-            async for chunk in response.aiter_raw():
-                yield chunk
+        try:
+            async with self._client.stream("POST", path, json=body) as response:
+                await self._raise_for_status_async(response)
+                async for chunk in response.aiter_raw():
+                    yield chunk
+        except httpx.TransportError as exc:
+            raise BackendError(str(exc)) from exc
 
     async def post_raw(self, path: str, body: dict[str, Any]) -> httpx.Response:
-        response = await self._client.post(path, json=body)
+        try:
+            response = await self._client.post(path, json=body)
+        except httpx.TransportError as exc:
+            raise BackendError(str(exc)) from exc
         self._raise_for_status(response)
         return response
 

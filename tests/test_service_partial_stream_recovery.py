@@ -63,5 +63,5 @@ async def test_buffered_chat_completion_recovers_from_partial_stream(tmp_path) -
     )
 
     assert response["choices"][0]["message"]["content"] == "answer"
-    assert response["choices"][0]["message"]["reasoning_content"] == "thinking"
+    assert response["choices"][0]["message"]["_reasoning_content"] == "thinking"
     assert response["choices"][0]["finish_reason"] == "stop"
