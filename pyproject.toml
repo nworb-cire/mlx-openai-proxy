@@ -37,6 +37,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "e2e: live end-to-end tests that require a running proxy and model backend",
+]
 
 [dependency-groups]
 dev = [

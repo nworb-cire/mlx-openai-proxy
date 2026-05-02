@@ -231,7 +231,6 @@ def dashboard_html() -> str:
             <th>Model</th>
             <th>Status</th>
             <th>Input</th>
-            <th>Images</th>
             <th>Schema</th>
             <th>Reasoning</th>
             <th>Output</th>
@@ -251,7 +250,6 @@ def dashboard_html() -> str:
             <th>Model</th>
             <th>Status</th>
             <th>Input</th>
-            <th>Images</th>
             <th>Schema</th>
             <th>Reasoning</th>
             <th>Output</th>
@@ -271,7 +269,6 @@ def dashboard_html() -> str:
             <th>Model</th>
             <th>Status</th>
             <th>Input</th>
-            <th>Images</th>
             <th>Schema</th>
             <th>Reasoning</th>
             <th>Output</th>
@@ -568,14 +565,13 @@ def dashboard_html() -> str:
             item.model || '',
             '<span class="good">running</span>',
             fmtInput(item),
-            item.input_image_count || 0,
             item.has_schema ? 'yes' : 'no',
             `${item.live_reasoning_chars || 0} chars / ~${item.live_reasoning_tokens_est || 0} tok`,
             `${item.live_output_chars || 0} chars / ~${item.live_output_tokens_est || 0} tok`,
             `<span class="mono">${fmtAge(item.service_ms)}</span>`,
             `<span class="mono">${fmtAge(item.queue_ms)}</span>`,
           ])).join('')
-        : '<tr><td colspan="10" class="muted">No active requests</td></tr>';
+        : '<tr><td colspan="9" class="muted">No active requests</td></tr>';
 
       document.getElementById('queued-body').innerHTML = queued.length
         ? queued.map((item) => row([
@@ -583,14 +579,13 @@ def dashboard_html() -> str:
             item.model || '',
             '<span class="muted">queued</span>',
             fmtInput(item),
-            item.input_image_count || 0,
             item.has_schema ? 'yes' : 'no',
             item.asks_for_reasoning ? 'yes' : 'no',
             '',
             '',
             `<span class="mono">${fmtAge(item.queue_ms)}</span>`,
           ])).join('')
-        : '<tr><td colspan="10" class="muted">No queued requests</td></tr>';
+        : '<tr><td colspan="9" class="muted">No queued requests</td></tr>';
 
       document.getElementById('history-body').innerHTML = recentHistory.length
         ? recentHistory.map((item) => row([
@@ -598,7 +593,6 @@ def dashboard_html() -> str:
             item.model || '',
             item.status === 'completed' ? `<span class="good">${item.status}</span>` : `<span class="${item.status === 'error' ? 'bad' : 'muted'}">${item.status}</span>`,
             fmtInput(item),
-            item.input_image_count || 0,
             item.has_schema ? 'yes' : 'no',
             item.reasoning_tokens != null || item.reasoning_chars != null
               ? `${item.reasoning_chars ?? 0} chars / ${item.reasoning_tokens ?? 0} tok`
@@ -609,7 +603,7 @@ def dashboard_html() -> str:
             `<span class="mono">${fmtAge(item.service_duration_ms)}</span>`,
             `<span class="mono">${fmtAge(item.queue_duration_ms)}</span>`,
           ])).join('')
-        : '<tr><td colspan="10" class="muted">No history yet</td></tr>';
+        : '<tr><td colspan="9" class="muted">No history yet</td></tr>';
     }
     refresh();
     setInterval(refresh, 2000);

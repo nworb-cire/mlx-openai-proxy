@@ -24,4 +24,9 @@ def test_dashboard_formats_input_by_endpoint_type() -> None:
     assert "parts.push(`${fmtNumber(item.input_audio_seconds, 1)}s audio`);" in html
     assert "parts.push(fmtCount(messages, 'input', 'inputs'));" in html
     assert "parts.push(fmtCount(messages, 'msg', 'msgs'));" in html
+    assert "parts.push(fmtCount(images, 'img', 'imgs'));" in html
+    assert "<th>Images</th>" not in html
+    assert "item.input_image_count || 0," not in html
+    assert 'colspan="9"' in html
+    assert 'colspan="10"' not in html
     assert "`${item.input_chars || 0} chars / ${item.input_messages || 0} msgs`" not in html
