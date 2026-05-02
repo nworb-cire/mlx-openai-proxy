@@ -8,13 +8,14 @@ import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from .asr import AsrRuntime, ParakeetAsrRuntime, ResidentAsrService
+from .asr import AsrError, AsrRuntime, ParakeetAsrRuntime, ResidentAsrService
 from .backend import BackendClient, BackendError
 from .config import Settings
 from .dashboard import dashboard_html
 from .logging_utils import configure_logging
 from .metrics_store import MetricsStore
 from .model_runtime import ModelRuntimeManager
+from .model_runtime import ModelRuntimeError
 from .model_scheduler import ModelScheduler
 from .service import ActiveRequestTimeoutError, ProxyService
 
@@ -127,6 +128,8 @@ def create_app(
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except BackendError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ModelRuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -139,6 +142,8 @@ def create_app(
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except BackendError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ModelRuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -159,6 +164,8 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except AsrError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         if isinstance(result, str):
             return PlainTextResponse(result)
         return result
