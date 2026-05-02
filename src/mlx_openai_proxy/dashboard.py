@@ -306,6 +306,36 @@ def dashboard_html() -> str:
       if (value == null || !Number.isFinite(value)) return '';
       return Number(value).toFixed(digits);
     }
+    function fmtCount(value, singular, plural) {
+      const count = value || 0;
+      return `${count} ${count === 1 ? singular : plural}`;
+    }
+    function fmtInput(item) {
+      const path = item.path || '';
+      const parts = [];
+      const chars = item.input_chars || 0;
+      const messages = item.input_messages || 0;
+      const images = item.input_image_count || 0;
+      if (path === '/v1/audio/transcriptions') {
+        if (item.input_audio_seconds != null) {
+          parts.push(`${fmtNumber(item.input_audio_seconds, 1)}s audio`);
+        } else {
+          parts.push('audio');
+        }
+      } else if (path === '/v1/responses') {
+        parts.push(`${chars} chars`);
+        parts.push(fmtCount(messages, 'input', 'inputs'));
+      } else if (path === '/v1/chat/completions') {
+        parts.push(`${chars} chars`);
+        parts.push(fmtCount(messages, 'msg', 'msgs'));
+      } else {
+        if (chars) parts.push(`${chars} chars`);
+        if (messages) parts.push(fmtCount(messages, 'input', 'inputs'));
+        if (!parts.length) parts.push('n/a');
+      }
+      if (images) parts.push(fmtCount(images, 'img', 'imgs'));
+      return parts.join(' / ');
+    }
     function modelLabel(model) {
       return model || 'unknown';
     }
@@ -537,7 +567,7 @@ def dashboard_html() -> str:
             fmtAge(item.age_ms),
             item.model || '',
             '<span class="good">running</span>',
-            `${item.input_chars || 0} chars / ${item.input_messages || 0} msgs`,
+            fmtInput(item),
             item.input_image_count || 0,
             item.has_schema ? 'yes' : 'no',
             `${item.live_reasoning_chars || 0} chars / ~${item.live_reasoning_tokens_est || 0} tok`,
@@ -552,7 +582,7 @@ def dashboard_html() -> str:
             fmtAge(item.age_ms),
             item.model || '',
             '<span class="muted">queued</span>',
-            `${item.input_chars || 0} chars / ${item.input_messages || 0} msgs`,
+            fmtInput(item),
             item.input_image_count || 0,
             item.has_schema ? 'yes' : 'no',
             item.asks_for_reasoning ? 'yes' : 'no',
@@ -567,7 +597,7 @@ def dashboard_html() -> str:
             fmtTime(item.started_at),
             item.model || '',
             item.status === 'completed' ? `<span class="good">${item.status}</span>` : `<span class="${item.status === 'error' ? 'bad' : 'muted'}">${item.status}</span>`,
-            `${item.input_chars || 0} chars / ${item.input_messages || 0} msgs`,
+            fmtInput(item),
             item.input_image_count || 0,
             item.has_schema ? 'yes' : 'no',
             item.reasoning_tokens != null || item.reasoning_chars != null

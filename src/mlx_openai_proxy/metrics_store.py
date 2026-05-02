@@ -277,7 +277,6 @@ class MetricsStore:
     @staticmethod
     def _public_view(record: dict[str, Any]) -> dict[str, Any]:
         hidden_fields: Iterable[str] = (
-            "path",
             "execution_path",
             "classification_reason",
             "metadata_json",
