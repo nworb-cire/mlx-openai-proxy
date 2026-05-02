@@ -26,6 +26,7 @@ from .prompting import (
     build_phase2_messages,
     build_repair_messages,
 )
+from .request_cache import RequestCache, RequestCacheEntry
 from .responses_bridge import chat_response_to_responses, responses_request_to_chat
 from .schema_utils import (
     chunk_text,
@@ -43,6 +44,7 @@ JSON_OBJECT_USER_INSTRUCTION = (
     "Return only one valid JSON object. "
     "Do not add markdown, prose, or code fences."
 )
+REQUEST_CACHE_TTL_SECONDS = 30 * 60
 
 
 class GemmaThoughtStreamParser:
@@ -141,6 +143,7 @@ class ProxyService:
         self._upstream_slots = asyncio.Semaphore(
             max(1, settings.max_upstream_concurrency)
         )
+        self._request_cache = RequestCache(ttl_seconds=REQUEST_CACHE_TTL_SECONDS)
 
     async def health(self) -> dict[str, Any]:
         return {"ok": True, "backend_base_url": self.settings.backend_base_url}
@@ -157,11 +160,86 @@ class ProxyService:
             ],
         }
 
+    def _cached_chat_response(
+        self,
+        body: dict[str, Any],
+        request_id: str,
+        cached: RequestCacheEntry,
+    ) -> dict[str, Any] | StreamingResponse:
+        log_event(
+            self.logger,
+            "request_cache_hit",
+            path="/v1/chat/completions",
+            model=body.get("model"),
+            stream=bool(body.get("stream")),
+        )
+        if cached.kind == "stream":
+            return StreamingResponse(
+                self._replay_cached_stream(request_id, cached.payload),
+                media_type="text/event-stream",
+            )
+        response = copy.deepcopy(cached.payload)
+        self._complete_chat_metrics(request_id, response)
+        return response
+
+    def _cached_responses_response(
+        self,
+        chat_body: dict[str, Any],
+        request_id: str,
+        cached: RequestCacheEntry,
+    ) -> dict[str, Any] | StreamingResponse:
+        log_event(
+            self.logger,
+            "request_cache_hit",
+            path="/v1/responses",
+            model=chat_body.get("model"),
+            stream=bool(chat_body.get("stream")),
+        )
+        if cached.kind == "stream":
+            return StreamingResponse(
+                self._replay_cached_stream(request_id, cached.payload),
+                media_type="text/event-stream",
+            )
+        response = copy.deepcopy(cached.payload)
+        usage = response.get("usage", {})
+        self.metrics.complete_request(
+            request_id,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            reasoning_tokens=(usage.get("completion_tokens_details") or {}).get(
+                "reasoning_tokens"
+            ),
+            output_chars=len(response.get("output_text", "") or ""),
+            reasoning_chars=0,
+        )
+        return response
+
+    async def _cache_stream(
+        self,
+        cache_key: str,
+        source: AsyncIterator[bytes],
+    ) -> AsyncIterator[bytes]:
+        chunks: list[bytes] = []
+        async for chunk in source:
+            chunks.append(chunk)
+            yield chunk
+        self._request_cache.set(cache_key, kind="stream", payload=chunks)
+
+    async def _replay_cached_stream(
+        self, request_id: str, chunks: list[bytes]
+    ) -> AsyncIterator[bytes]:
+        for chunk in chunks:
+            yield chunk
+        self.metrics.complete_request(request_id)
+
     async def chat(self, body: dict[str, Any]) -> dict[str, Any] | StreamingResponse:
         self._validate_chat_body(body)
         body = normalize_chat_images(body, self.settings.max_inline_image_bytes)
         body = self._prepare_reasoning_request(body)
         classification = classify_chat_request(body, self.settings.schema_mode)
+        cache_key = self._request_cache.make_key(
+            path="/v1/chat/completions", body=body
+        )
         request_id = self.metrics.start_request(
             self._build_request_record(
                 path="/v1/chat/completions",
@@ -178,18 +256,29 @@ class ProxyService:
             model=body.get("model"),
             stream=bool(body.get("stream")),
         )
+        cached = self._request_cache.get(cache_key)
+        if cached is not None:
+            return self._cached_chat_response(body, request_id, cached)
         try:
             if classification.execution_path == ExecutionPath.PASSTHROUGH:
                 if self._is_json_object_mode(body):
                     if body.get("stream"):
                         return StreamingResponse(
-                            self._chat_json_object_stream(body, request_id),
+                            self._cache_stream(
+                                cache_key,
+                                self._chat_json_object_stream(body, request_id),
+                            ),
                             media_type="text/event-stream",
                         )
-                    return await self._chat_json_object_nonstream(body, request_id)
+                    response = await self._chat_json_object_nonstream(body, request_id)
+                    self._request_cache.set(cache_key, kind="json", payload=response)
+                    return response
                 if body.get("stream"):
                     return StreamingResponse(
-                        self._passthrough_chat_stream(body, request_id),
+                        self._cache_stream(
+                            cache_key,
+                            self._passthrough_chat_stream(body, request_id),
+                        ),
                         media_type="text/event-stream",
                     )
                 async with self._service_slot(request_id, body.get("model")):
@@ -197,7 +286,11 @@ class ProxyService:
                         body, request_id=request_id
                     )
                 self._complete_chat_metrics(request_id, response)
-                return self._public_chat_response(response)
+                public_response = self._public_chat_response(response)
+                self._request_cache.set(
+                    cache_key, kind="json", payload=public_response
+                )
+                return public_response
 
             if (
                 classification.execution_path
@@ -205,7 +298,10 @@ class ProxyService:
             ):
                 if body.get("stream"):
                     return StreamingResponse(
-                        self._chat_strict_structured_stream(body, request_id),
+                        self._cache_stream(
+                            cache_key,
+                            self._chat_strict_structured_stream(body, request_id),
+                        ),
                         media_type="text/event-stream",
                     )
                 async with self._service_slot(request_id, body.get("model")):
@@ -213,16 +309,27 @@ class ProxyService:
                         body, request_id=request_id
                     )
                 self._complete_chat_metrics(request_id, response)
-                return self._public_chat_response(response)
+                public_response = self._public_chat_response(response)
+                self._request_cache.set(
+                    cache_key, kind="json", payload=public_response
+                )
+                return public_response
 
             if body.get("stream"):
                 return StreamingResponse(
-                    self._chat_structured_stream(body, classification, request_id),
+                    self._cache_stream(
+                        cache_key,
+                        self._chat_structured_stream(
+                            body, classification, request_id
+                        ),
+                    ),
                     media_type="text/event-stream",
                 )
-            return await self._chat_structured_nonstream(
+            response = await self._chat_structured_nonstream(
                 body, classification, request_id
             )
+            self._request_cache.set(cache_key, kind="json", payload=response)
+            return response
         except Exception as exc:
             self.metrics.fail_request(request_id, error_message=str(exc))
             raise
@@ -234,6 +341,7 @@ class ProxyService:
         chat_body = responses_request_to_chat(body)
         chat_body = self._prepare_reasoning_request(chat_body)
         classification = classify_chat_request(chat_body, self.settings.schema_mode)
+        cache_key = self._request_cache.make_key(path="/v1/responses", body=body)
         request_id = self.metrics.start_request(
             self._build_request_record(
                 path="/v1/responses",
@@ -241,9 +349,15 @@ class ProxyService:
                 classification=classification,
             )
         )
+        cached = self._request_cache.get(cache_key)
+        if cached is not None:
+            return self._cached_responses_response(chat_body, request_id, cached)
         if body.get("stream"):
             return StreamingResponse(
-                self._responses_stream(chat_body, request_id),
+                self._cache_stream(
+                    cache_key,
+                    self._responses_stream(chat_body, request_id),
+                ),
                 media_type="text/event-stream",
             )
         try:
@@ -252,6 +366,7 @@ class ProxyService:
             )
             response = chat_response_to_responses(chat_response)
             self._complete_responses_metrics(request_id, response, chat_response)
+            self._request_cache.set(cache_key, kind="responses_json", payload=response)
             return response
         except Exception as exc:
             self.metrics.fail_request(request_id, error_message=str(exc))
