@@ -1270,6 +1270,7 @@ class ProxyService:
         usage: dict[str, Any] = {}
         reasoning_parts: list[str] = []
         output_parts: list[str] = []
+        tool_calls: dict[int, dict[str, Any]] = {}
         gemma_parser = self._make_gemma_stream_parser(stream_body.get("model"))
 
         try:
@@ -1327,6 +1328,30 @@ class ProxyService:
                                     self.metrics.append_progress(
                                         request_id, output_delta=piece
                                     )
+                    for tool_call_delta in delta.get("tool_calls") or []:
+                        if not isinstance(tool_call_delta, dict):
+                            continue
+                        tool_index = int(tool_call_delta.get("index") or 0)
+                        tool_call = tool_calls.setdefault(
+                            tool_index,
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            },
+                        )
+                        if isinstance(tool_call_delta.get("id"), str):
+                            tool_call["id"] += tool_call_delta["id"]
+                        if isinstance(tool_call_delta.get("type"), str):
+                            tool_call["type"] = tool_call_delta["type"]
+                        function_delta = tool_call_delta.get("function") or {}
+                        if isinstance(function_delta, dict):
+                            if isinstance(function_delta.get("name"), str):
+                                tool_call["function"]["name"] += function_delta["name"]
+                            if isinstance(function_delta.get("arguments"), str):
+                                tool_call["function"]["arguments"] += function_delta[
+                                    "arguments"
+                                ]
                     if isinstance(choice.get("finish_reason"), str):
                         finish_reason = choice["finish_reason"]
         except httpx.RemoteProtocolError:
@@ -1356,7 +1381,7 @@ class ProxyService:
         message: dict[str, Any] = {
             "role": role,
             "content": "".join(output_parts),
-            "tool_calls": [],
+            "tool_calls": [tool_calls[index] for index in sorted(tool_calls)],
         }
         reasoning_text = "".join(reasoning_parts)
         if reasoning_text:

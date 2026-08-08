@@ -181,9 +181,27 @@ class ResidentAsrService:
 
         content = await upload.read()
         pcm, sample_rate = decode_audio_bytes(content, upload.filename or "")
+        transcript = await self.transcribe_pcm(
+            pcm,
+            sample_rate,
+            path="/v1/audio/transcriptions",
+        )
+
+        if fmt == "text":
+            return transcript.text
+        return {"text": transcript.text}
+
+    async def transcribe_pcm(
+        self,
+        pcm: bytes,
+        sample_rate: int,
+        *,
+        path: str = "/wyoming/stt",
+    ) -> Transcript:
+        """Transcribe PCM audio with shared concurrency and metrics."""
         request_id = self.metrics.start_request(
             {
-                "path": "/v1/audio/transcriptions",
+                "path": path,
                 "model": self.config.alias,
                 "stream": False,
                 "execution_path": "asr",
@@ -205,10 +223,7 @@ class ResidentAsrService:
         except Exception as exc:
             self.metrics.fail_request(request_id, error_message=str(exc))
             raise
-
-        if fmt == "text":
-            return transcript.text
-        return {"text": transcript.text}
+        return transcript
 
     async def realtime(self, websocket: WebSocket) -> None:
         await websocket.accept()

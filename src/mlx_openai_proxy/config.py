@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     model_config_path: str = Field(default_factory=_default_model_config_path)
     models: list[ConfiguredModel] = Field(default_factory=_default_models)
     asr: ConfiguredAsr = Field(default_factory=_default_asr)
+    wyoming_stt_uri: str | None = Field(default=None)
 
     schema_mode: StructuredMode = Field(default=StructuredMode.AUTO)
     phase2_max_tokens: int = Field(default=1024)

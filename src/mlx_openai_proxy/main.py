@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse
 
 from .asr import AsrError, AsrRuntime, ParakeetAsrRuntime, ResidentAsrService
 from .backend import BackendClient, BackendError
@@ -17,12 +18,18 @@ from .metrics_store import MetricsStore
 from .model_runtime import ModelRuntimeManager
 from .model_runtime import ModelRuntimeError
 from .model_scheduler import ModelScheduler
+from .ollama_compat import (
+    ollama_request_to_openai,
+    openai_response_to_ollama,
+    tags_response,
+)
 from .service import (
     ActiveRequestTimeoutError,
     ProxyService,
     RequestPreemptedError,
     RequestQueueFullError,
 )
+from .wyoming_stt import WyomingSttServer
 
 
 async def _json_object_body(request: Request) -> dict[str, object]:
@@ -64,14 +71,23 @@ def create_app(
         asr_runtime or ParakeetAsrRuntime(settings.asr),
         metrics,
     )
+    wyoming_stt = (
+        WyomingSttServer(settings.wyoming_stt_uri, asr)
+        if settings.wyoming_stt_uri
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
             await runtime.normalize_residency()
             await asr.load()
+            if wyoming_stt is not None:
+                await wyoming_stt.start()
             yield
         finally:
+            if wyoming_stt is not None:
+                await wyoming_stt.close()
             await asr.close()
             await backend.close()
 
@@ -82,6 +98,7 @@ def create_app(
     app.state.runtime = runtime
     app.state.scheduler = scheduler
     app.state.asr = asr
+    app.state.wyoming_stt = wyoming_stt
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
@@ -95,6 +112,45 @@ def create_app(
         data = list(payload.get("data", []))
         data.append(asr.advertised_model())
         return {"object": "list", "data": data}
+
+    @app.get("/api/tags")
+    async def ollama_tags() -> dict[str, object]:
+        payload = await service.models()
+        model_ids = [
+            item["id"]
+            for item in payload.get("data", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+        return tags_response(model_ids)
+
+    @app.post("/api/chat")
+    async def ollama_chat(request: Request):
+        body = await _json_object_body(request)
+        stream = body.get("stream", True) is not False
+        try:
+            response = await service.chat(ollama_request_to_openai(body))
+            if not isinstance(response, dict):
+                raise ValueError("Unexpected streaming response from local model facade")
+            payload = openai_response_to_ollama(response)
+        except RequestQueueFullError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except RequestPreemptedError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ActiveRequestTimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except BackendError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ModelRuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not stream:
+            return payload
+
+        async def one_chunk():
+            yield f"{json.dumps(payload, separators=(',', ':'))}\n"
+
+        return StreamingResponse(one_chunk(), media_type="application/x-ndjson")
 
     @app.get("/admin/dashboard", response_class=HTMLResponse)
     async def admin_dashboard() -> str:

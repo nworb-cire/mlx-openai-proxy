@@ -36,7 +36,9 @@ Start `LM Studio` and the proxy together:
 bin/start-stack.sh
 ```
 
-By default, the helper script starts the `LM Studio` backend on `127.0.0.1:8097` and the OpenAI-compatible proxy on `0.0.0.0:8080`.
+By default, the helper script starts the `LM Studio` backend on `127.0.0.1:8097`,
+the HTTP proxy on `0.0.0.0:8080`, and a Wyoming Parakeet STT listener on
+`0.0.0.0:10300`.
 
 List available models:
 
@@ -71,6 +73,7 @@ Runtime settings are read from environment variables with the `MLX_PROXY_` prefi
 | `MLX_PROXY_PORT` | `8090` | Port used by the Python entrypoint. `bin/start-stack.sh` overrides this to `8080`. |
 | `MLX_PROXY_BACKEND_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible backend URL. `bin/start-stack.sh` starts LM Studio on `127.0.0.1:8097` and points the proxy there. |
 | `MLX_PROXY_MODEL_CONFIG_PATH` | `config/models.json` | JSON file containing the served model aliases and LM Studio model keys. |
+| `MLX_PROXY_WYOMING_STT_URI` | disabled | Optional Wyoming listener URI for the resident Parakeet model. `bin/start-stack.sh` enables `tcp://0.0.0.0:10300`. |
 | `MLX_PROXY_METRICS_DB_PATH` | `~/.local/share/mlx-openai-proxy/metrics.db` | SQLite database used for request history and dashboard metrics. |
 | `MLX_PROXY_LM_STUDIO_BIN` | discovered `lms` or `~/.lmstudio/bin/lms` | LM Studio CLI used for model residency management. |
 | `MLX_PROXY_MAX_UPSTREAM_CONCURRENCY` | `2` | Maximum number of concurrent upstream model requests. |
@@ -121,6 +124,17 @@ stream base64 mono PCM16 audio chunks using `input_audio_buffer.append`. Server
 VAD is enabled by default and emits a completed transcription event after
 trailing silence; clients can send `session.update` with `turn_detection: null`
 to use manual `input_audio_buffer.commit` instead.
+
+### Home Assistant
+
+The proxy exposes the subset of the Ollama API used by Home Assistant at
+`/api/tags` and `/api/chat`. Point Home Assistant's Ollama integration at the
+HTTP origin without a path, for example `http://192.168.1.88:8080`, and choose
+one of the aliases from `config/models.json`.
+
+When `MLX_PROXY_WYOMING_STT_URI` is enabled, add a separate Wyoming Protocol
+integration in Home Assistant for that host and port. The listener advertises
+the resident `parakeet:tdt-0.6b-v3` model and its supported languages.
 
 ## In Practice
 
